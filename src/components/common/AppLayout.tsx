@@ -19,8 +19,6 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/pipeline', icon: Layers, label: 'Pipeline' },
   { to: '/buyers', icon: Users, label: 'Buyers' },
-  { to: '/leads', icon: FileText, label: 'Leads' },
-  { to: '/leads/import', icon: Upload, label: 'Import Leads' },
   { to: '/deals', icon: TrendingUp, label: 'Deals' },
 ];
 

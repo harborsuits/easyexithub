@@ -12,6 +12,7 @@ import LeadsPage from "./pages/LeadsPage";
 import LeadDetailPage from "./pages/LeadDetailPage";
 import DealsPage from "./pages/DealsPage";
 import ImportLeadsPage from "./pages/ImportLeadsPage";
+import UnifiedDashboard from "./pages/UnifiedDashboard";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -25,12 +26,11 @@ const App = () => (
           <Sonner />
           <BrowserRouter>
           <Routes>
-            <Route path="/" element={<Index />} />
+            <Route path="/" element={<UnifiedDashboard />} />
             <Route path="/pipeline" element={<PipelinePage />} />
             <Route path="/buyers" element={<BuyersPage />} />
             <Route path="/leads" element={<LeadsPage />} />
             <Route path="/leads/:id" element={<LeadDetailPage />} />
-            <Route path="/leads/import" element={<ImportLeadsPage />} />
             <Route path="/deals" element={<DealsPage />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
