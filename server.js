@@ -1,6 +1,7 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -12,59 +13,83 @@ app.use(express.json());
 
 // API Routes
 app.post('/api/scrape', async (req, res) => {
-  const { area, type } = req.body;
+  const { area, type = 'properties' } = req.body;
 
   if (!area) {
     return res.status(400).json({ error: 'Area is required' });
   }
 
   try {
-    // Mock implementation - returns sample data
-    // In production, this would call actual scrapers
-    const mockLeads = generateMockLeads(area, type);
+    // Call Python scraper via subprocess
+    const result = await runPythonScraper(area, type);
     
-    res.json({
-      success: true,
-      count: mockLeads.length,
-      area,
-      type,
-      leads: mockLeads,
-    });
+    if (result.success) {
+      res.json({
+        success: true,
+        count: result.properties?.length || 0,
+        area: result.area,
+        type: result.type,
+        properties: result.properties || [],
+        metadata: result.metadata || {},
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: result.error || 'Scraping failed',
+        area,
+        type,
+      });
+    }
   } catch (error) {
+    console.error('Scraper error:', error);
     res.status(500).json({ 
       error: error instanceof Error ? error.message : 'Scraping failed' 
     });
   }
 });
 
-function generateMockLeads(area, type) {
-  const baseLeads = [
-    {
-      id: `${area}-001`,
-      address: '123 Main St',
-      city: area,
-      state: 'ME',
-      zip: '04011',
-      owner_name: 'John Smith',
-      owner_phone: '+12075551234',
-      assessed_value: 150000,
-      notes: type === 'tax-delinquent' ? 'Tax delinquent 2+ years' : 'GIS/Tax deed record',
-      deal_stage_id: 1,
-    },
-    {
-      id: `${area}-002`,
-      address: '456 Oak Ave',
-      city: area,
-      state: 'ME',
-      zip: '04011',
-      owner_name: 'Jane Doe',
-      owner_phone: '+12075555678',
-      assessed_value: 200000,
-      notes: type === 'foreclosures' ? 'Lis pendens filed' : 'Municipal GIS record',
-      deal_stage_id: 1,
-    },
-  ];
-  return baseLeads;
+function runPythonScraper(area, type) {
+  return new Promise((resolve, reject) => {
+    const pythonScript = join(__dirname, 'scrapers', 'run_scraper.py');
+    const python = spawn('python3', [pythonScript, area, type], {
+      timeout: 120000, // 2 minute timeout
+      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large datasets
+    });
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+      console.warn('Python stderr:', data.toString());
+    });
+
+    python.on('close', (code) => {
+      if (code !== 0) {
+        console.error('Python exited with code:', code);
+        console.error('Error output:', errorOutput);
+        reject(new Error(`Python scraper failed: ${errorOutput}`));
+        return;
+      }
+
+      try {
+        const result = JSON.parse(output);
+        resolve(result);
+      } catch (e) {
+        console.error('Failed to parse Python output:', output);
+        reject(new Error('Failed to parse scraper output'));
+      }
+    });
+
+    python.on('error', (err) => {
+      console.error('Python process error:', err);
+      reject(err);
+    });
+  });
 }
 
 // Serve static files from dist AFTER api routes
