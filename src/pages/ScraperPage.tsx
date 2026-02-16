@@ -25,7 +25,8 @@ export function ScraperPage() {
 
     setIsLoading(true);
     try {
-      const response = await fetch('/api/scrape', {
+      // Step 1: Scrape raw properties
+      const scrapeResponse = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -34,17 +35,44 @@ export function ScraperPage() {
         }),
       });
 
-      if (!response.ok) throw new Error('Scraping failed');
+      if (!scrapeResponse.ok) throw new Error('Scraping failed');
 
-      const data = await response.json();
+      const scrapeData = await scrapeResponse.json();
 
       toast({
-        title: 'Success',
-        description: `Scraped ${data.count} ${scraperType} from ${area}`,
+        title: 'Scraping complete',
+        description: `Found ${scrapeData.count} properties. Analyzing...`,
       });
 
-      // Redirect to leads page to show imported data
-      setTimeout(() => navigate('/leads'), 1000);
+      // Step 2: Enrich with probate, obituary, code violations + score
+      const enrichResponse = await fetch('/api/enrich-and-score', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          properties: scrapeData.properties || [],
+          town: area,
+        }),
+      });
+
+      if (!enrichResponse.ok) throw new Error('Enrichment failed');
+
+      const enrichedData = await enrichResponse.json();
+
+      // Store in sessionStorage for preview page
+      sessionStorage.setItem('scraperPreview', JSON.stringify({
+        town: area,
+        scraperType,
+        properties: enrichedData.scored_properties || [],
+        enrichmentSummary: enrichedData.summary || {},
+      }));
+
+      toast({
+        title: 'Analysis complete',
+        description: `${enrichedData.summary?.viable_leads || 0} viable leads identified`,
+      });
+
+      // Redirect to preview page
+      navigate('/scraper/preview');
     } catch (error) {
       toast({
         title: 'Error',

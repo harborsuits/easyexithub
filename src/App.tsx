@@ -13,6 +13,7 @@ import LeadDetailPage from "./pages/LeadDetailPage";
 import DealsPage from "./pages/DealsPage";
 import ImportLeadsPage from "./pages/ImportLeadsPage";
 import { ScraperPage } from "./pages/ScraperPage";
+import { ScraperPreviewPage } from "./pages/ScraperPreviewPage";
 import UnifiedDashboard from "./pages/UnifiedDashboard";
 import NotFound from "./pages/NotFound";
 
@@ -35,6 +36,7 @@ const App = () => (
             <Route path="/deals" element={<DealsPage />} />
             <Route path="/leads/import" element={<ImportLeadsPage />} />
             <Route path="/scraper" element={<ScraperPage />} />
+            <Route path="/scraper/preview" element={<ScraperPreviewPage />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

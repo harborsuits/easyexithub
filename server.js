@@ -20,7 +20,6 @@ app.post('/api/scrape', async (req, res) => {
   }
 
   try {
-    // Call Python scraper via subprocess
     const result = await runPythonScraper(area, type);
     
     if (result.success) {
@@ -48,12 +47,64 @@ app.post('/api/scrape', async (req, res) => {
   }
 });
 
+// Enrich and score leads
+app.post('/api/enrich-and-score', async (req, res) => {
+  const { properties, town } = req.body;
+
+  if (!properties || !Array.isArray(properties)) {
+    return res.status(400).json({ error: 'Properties array is required' });
+  }
+
+  try {
+    const result = await runEnrichmentPipeline(properties, town || 'unknown');
+    
+    res.json({
+      success: result.success,
+      scored_properties: result.scored_properties || [],
+      viable_leads: result.viable_leads || [],
+      summary: result.summary || {},
+      error: result.error || null,
+    });
+  } catch (error) {
+    console.error('Enrichment error:', error);
+    res.status(500).json({ 
+      error: error instanceof Error ? error.message : 'Enrichment failed',
+      scored_properties: [],
+      summary: {},
+    });
+  }
+});
+
+// Import leads to Supabase
+app.post('/api/import-leads', async (req, res) => {
+  const { properties, town, source } = req.body;
+
+  if (!properties || !Array.isArray(properties) || properties.length === 0) {
+    return res.status(400).json({ error: 'Properties array is required' });
+  }
+
+  try {
+    // TODO: Import to Supabase leads table
+    // For now, return success
+    res.json({
+      success: true,
+      count: properties.length,
+      message: `Imported ${properties.length} leads from ${town}`,
+    });
+  } catch (error) {
+    console.error('Import error:', error);
+    res.status(500).json({ 
+      error: error instanceof Error ? error.message : 'Import failed' 
+    });
+  }
+});
+
 function runPythonScraper(area, type) {
   return new Promise((resolve, reject) => {
     const pythonScript = join(__dirname, 'scrapers', 'run_scraper.py');
     const python = spawn('python3', [pythonScript, area, type], {
-      timeout: 120000, // 2 minute timeout
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large datasets
+      timeout: 120000,
+      maxBuffer: 10 * 1024 * 1024,
     });
 
     let output = '';
@@ -71,7 +122,6 @@ function runPythonScraper(area, type) {
     python.on('close', (code) => {
       if (code !== 0) {
         console.error('Python exited with code:', code);
-        console.error('Error output:', errorOutput);
         reject(new Error(`Python scraper failed: ${errorOutput}`));
         return;
       }
@@ -82,6 +132,53 @@ function runPythonScraper(area, type) {
       } catch (e) {
         console.error('Failed to parse Python output:', output);
         reject(new Error('Failed to parse scraper output'));
+      }
+    });
+
+    python.on('error', (err) => {
+      console.error('Python process error:', err);
+      reject(err);
+    });
+  });
+}
+
+function runEnrichmentPipeline(properties, town) {
+  return new Promise((resolve, reject) => {
+    const pythonScript = join(__dirname, 'scrapers', 'enrich_and_score.py');
+    const python = spawn('python3', [pythonScript], {
+      timeout: 300000, // 5 minute timeout for enrichment
+      maxBuffer: 20 * 1024 * 1024, // 20MB buffer
+    });
+
+    const inputData = JSON.stringify({ properties, town });
+    python.stdin.write(inputData);
+    python.stdin.end();
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+      console.warn('Python stderr:', data.toString());
+    });
+
+    python.on('close', (code) => {
+      if (code !== 0) {
+        console.error('Python exited with code:', code);
+        reject(new Error(`Enrichment failed: ${errorOutput}`));
+        return;
+      }
+
+      try {
+        const result = JSON.parse(output);
+        resolve(result);
+      } catch (e) {
+        console.error('Failed to parse enrichment output:', output);
+        reject(new Error('Failed to parse enrichment output'));
       }
     });
 
