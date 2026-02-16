@@ -13,6 +13,7 @@ import {
   FileText,
   TrendingUp,
   Upload,
+  Search,
 } from 'lucide-react';
 
 const navItems = [
@@ -20,6 +21,7 @@ const navItems = [
   { to: '/pipeline', icon: Layers, label: 'Pipeline' },
   { to: '/buyers', icon: Users, label: 'Buyers' },
   { to: '/deals', icon: TrendingUp, label: 'Deals' },
+  { to: '/scraper', icon: Search, label: 'Scraper' },
 ];
 
 interface AppLayoutProps {
