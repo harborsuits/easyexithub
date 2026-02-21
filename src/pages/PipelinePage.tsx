@@ -1,177 +1,115 @@
-import { useState } from 'react';
-import { Lead, PipelineStage } from '@/types';
-import { useCRM } from '@/context/CRMContext';
 import { AppLayout } from '@/components/common/AppLayout';
-import { PipelineBoard } from '@/components/pipeline/PipelineBoard';
-import { LeadDetailDialog } from '@/components/leads/LeadDetailDialog';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { supabase } from '@/integrations/supabase/client';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Link } from 'react-router-dom';
+import { useState } from 'react';
+
+const STAGE_COLORS: Record<string, string> = {
+  raw_lead: 'bg-slate-100 border-slate-300',
+  contacted: 'bg-blue-50 border-blue-300',
+  interested: 'bg-purple-50 border-purple-300',
+  offer_made: 'bg-yellow-50 border-yellow-300',
+  under_contract: 'bg-green-50 border-green-300',
+  assigned: 'bg-emerald-50 border-emerald-300',
+  closed_won: 'bg-green-100 border-green-400',
+  closed_lost: 'bg-red-50 border-red-300',
+  dead: 'bg-gray-100 border-gray-300',
+};
 
 export function PipelinePage() {
-  const { addLead, setSelectedLead, selectedLead } = useCRM();
-  const [showAddDialog, setShowAddDialog] = useState(false);
-  const [newLead, setNewLead] = useState({
-    address: '',
-    city: '',
-    state: 'TX',
-    zip: '',
-    beds: '',
-    baths: '',
-    sqft: '',
-    ownerName: '',
-    ownerPhone: '',
+  const queryClient = useQueryClient();
+  const [draggedLead, setDraggedLead] = useState<number | null>(null);
+
+  const { data: stages } = useQuery({
+    queryKey: ['deal-stages'],
+    queryFn: async () => {
+      const { data } = await supabase.from('deal_stages').select('id, name').order('id');
+      return data || [];
+    },
   });
 
-  const handleAddLead = () => {
-    addLead({
-      stage: 'raw',
-      address: newLead.address,
-      city: newLead.city,
-      state: newLead.state,
-      zip: newLead.zip,
-      beds: parseInt(newLead.beds) || 0,
-      baths: parseFloat(newLead.baths) || 0,
-      sqft: parseInt(newLead.sqft) || 0,
-      ownerName: newLead.ownerName,
-      ownerPhone: newLead.ownerPhone || undefined,
-      comps: [],
-      arv: 0,
-      repairItems: [],
-      totalRepairs: 0,
-      assignmentFee: 10000,
-      mao: 0,
-      contacts: [],
-    });
-    setNewLead({
-      address: '',
-      city: '',
-      state: 'TX',
-      zip: '',
-      beds: '',
-      baths: '',
-      sqft: '',
-      ownerName: '',
-      ownerPhone: '',
-    });
-    setShowAddDialog(false);
-  };
+  const { data: leads } = useQuery({
+    queryKey: ['leads-pipeline'],
+    queryFn: async () => {
+      const { data } = await supabase.from('leads').select('id, owner_name, owner_phone, deal_stage_id, viability_score, market_id, status');
+      return data || [];
+    },
+  });
 
-  const handleLeadClick = (lead: Lead) => {
-    setSelectedLead(lead);
+  const moveLead = useMutation({
+    mutationFn: async ({ leadId, stageId }: { leadId: number; stageId: number }) => {
+      const { error } = await supabase.from('leads').update({ deal_stage_id: stageId }).eq('id', leadId);
+      if (error) throw error;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['leads-pipeline'] }),
+  });
+
+  const handleDrop = (stageId: number) => {
+    if (draggedLead) {
+      moveLead.mutate({ leadId: draggedLead, stageId });
+      setDraggedLead(null);
+    }
   };
 
   return (
-    <AppLayout onAddLead={() => setShowAddDialog(true)}>
-      <div className="h-full">
-        <PipelineBoard onLeadClick={handleLeadClick} />
+    <AppLayout>
+      <div className="max-w-full mx-auto space-y-4">
+        <h1 className="text-3xl font-bold">Pipeline</h1>
+        <p className="text-muted-foreground">Drag leads between stages to update</p>
+
+        <div className="flex gap-3 overflow-x-auto pb-4" style={{ minHeight: '70vh' }}>
+          {stages?.map((stage) => {
+            const stageLeads = leads?.filter((l) => l.deal_stage_id === stage.id) || [];
+            const colorClass = STAGE_COLORS[stage.name] || 'bg-muted border-border';
+
+            return (
+              <div
+                key={stage.id}
+                className={`flex-shrink-0 w-64 rounded-lg border-2 ${colorClass} flex flex-col`}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => handleDrop(stage.id)}
+              >
+                <div className="p-3 border-b font-semibold text-sm flex items-center justify-between">
+                  <span className="capitalize">{stage.name.replace('_', ' ')}</span>
+                  <Badge variant="secondary">{stageLeads.length}</Badge>
+                </div>
+
+                <div className="p-2 space-y-2 flex-1 overflow-y-auto" style={{ maxHeight: '60vh' }}>
+                  {stageLeads.slice(0, 25).map((lead: any) => (
+                    <div
+                      key={lead.id}
+                      draggable
+                      onDragStart={() => setDraggedLead(lead.id)}
+                      className="bg-white rounded-md border p-3 cursor-grab active:cursor-grabbing shadow-sm hover:shadow transition"
+                    >
+                      <Link to={`/leads/${lead.id}`} className="font-medium text-sm text-blue-600 hover:underline block">
+                        {lead.owner_name || `Lead #${lead.id}`}
+                      </Link>
+                      {lead.owner_phone && <p className="text-xs text-muted-foreground mt-1">{lead.owner_phone}</p>}
+                      <div className="flex items-center justify-between mt-2">
+                        {lead.viability_score != null && (
+                          <Badge variant="outline" className="text-[10px]">Score: {lead.viability_score}</Badge>
+                        )}
+                        <span className="text-[10px] text-muted-foreground capitalize">{lead.status || '—'}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {stageLeads.length > 25 && (
+                    <Link to="/leads" className="block text-xs text-blue-600 hover:underline text-center py-2">
+                      +{stageLeads.length - 25} more → View in Leads
+                    </Link>
+                  )}
+                  {stageLeads.length === 0 && (
+                    <p className="text-xs text-muted-foreground text-center py-4">No leads</p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
-
-      <LeadDetailDialog
-        lead={selectedLead}
-        open={!!selectedLead}
-        onOpenChange={(open) => !open && setSelectedLead(null)}
-      />
-
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add New Lead</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 mt-4">
-            <div>
-              <Label className="text-xs">Property Address *</Label>
-              <Input
-                value={newLead.address}
-                onChange={(e) => setNewLead({ ...newLead, address: e.target.value })}
-                placeholder="123 Main Street"
-              />
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label className="text-xs">City *</Label>
-                <Input
-                  value={newLead.city}
-                  onChange={(e) => setNewLead({ ...newLead, city: e.target.value })}
-                  placeholder="Dallas"
-                />
-              </div>
-              <div>
-                <Label className="text-xs">State</Label>
-                <Input
-                  value={newLead.state}
-                  onChange={(e) => setNewLead({ ...newLead, state: e.target.value })}
-                  placeholder="TX"
-                />
-              </div>
-              <div>
-                <Label className="text-xs">ZIP</Label>
-                <Input
-                  value={newLead.zip}
-                  onChange={(e) => setNewLead({ ...newLead, zip: e.target.value })}
-                  placeholder="75201"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label className="text-xs">Beds</Label>
-                <Input
-                  type="number"
-                  value={newLead.beds}
-                  onChange={(e) => setNewLead({ ...newLead, beds: e.target.value })}
-                  placeholder="3"
-                />
-              </div>
-              <div>
-                <Label className="text-xs">Baths</Label>
-                <Input
-                  type="number"
-                  step="0.5"
-                  value={newLead.baths}
-                  onChange={(e) => setNewLead({ ...newLead, baths: e.target.value })}
-                  placeholder="2"
-                />
-              </div>
-              <div>
-                <Label className="text-xs">Sqft</Label>
-                <Input
-                  type="number"
-                  value={newLead.sqft}
-                  onChange={(e) => setNewLead({ ...newLead, sqft: e.target.value })}
-                  placeholder="1800"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">Owner Name *</Label>
-                <Input
-                  value={newLead.ownerName}
-                  onChange={(e) => setNewLead({ ...newLead, ownerName: e.target.value })}
-                  placeholder="John Smith"
-                />
-              </div>
-              <div>
-                <Label className="text-xs">Owner Phone</Label>
-                <Input
-                  value={newLead.ownerPhone}
-                  onChange={(e) => setNewLead({ ...newLead, ownerPhone: e.target.value })}
-                  placeholder="(555) 555-5555"
-                />
-              </div>
-            </div>
-            <Button 
-              onClick={handleAddLead} 
-              className="w-full"
-              disabled={!newLead.address || !newLead.city || !newLead.ownerName}
-            >
-              Add Lead
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </AppLayout>
   );
 }

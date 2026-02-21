@@ -1,232 +1,260 @@
 import { useState, useEffect } from 'react';
-import { MapPin, DollarSign, TrendingUp, Plus, Search, Filter, Loader } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { AppLayout } from '@/components/common/AppLayout';
-import { useLeads, Lead } from '@/context/LeadsContextV2';
+import { supabase } from '@/integrations/supabase/client';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Search, Phone, PhoneOff, ChevronLeft, ChevronRight, Check, X, ArrowUpDown } from 'lucide-react';
 
-const getStatusBadgeColor = (stageName?: string) => {
-  if (!stageName) return 'bg-gray-100 text-gray-800';
-  const lowerName = stageName.toLowerCase();
-  
-  if (lowerName.includes('raw')) return 'bg-blue-100 text-blue-800';
-  if (lowerName.includes('contacted')) return 'bg-purple-100 text-purple-800';
-  if (lowerName.includes('negotiat')) return 'bg-orange-100 text-orange-800';
-  if (lowerName.includes('contract')) return 'bg-green-100 text-green-800';
-  if (lowerName.includes('closed')) return 'bg-emerald-100 text-emerald-800';
-  return 'bg-gray-100 text-gray-800';
+const PAGE_SIZE = 50;
+
+const STAGE_BADGE_COLORS: Record<string, string> = {
+  raw_lead: 'bg-slate-100 text-slate-700',
+  contacted: 'bg-blue-100 text-blue-700',
+  qualified: 'bg-purple-100 text-purple-700',
+  offer_made: 'bg-amber-100 text-amber-700',
+  under_contract: 'bg-green-100 text-green-700',
+  assigned: 'bg-cyan-100 text-cyan-700',
+  closed_won: 'bg-emerald-100 text-emerald-800',
+  closed_lost: 'bg-red-100 text-red-700',
+  dead: 'bg-gray-100 text-gray-600',
 };
 
+function ScoreBadge({ score }: { score: number | null }) {
+  if (score == null) return <span className="text-muted-foreground">—</span>;
+  const color = score >= 50 ? 'bg-green-100 text-green-800' : score >= 30 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600';
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${color}`}>{score}</span>;
+}
+
+function Skeleton({ className = '' }: { className?: string }) {
+  return <div className={`animate-pulse bg-muted rounded ${className}`} />;
+}
+
+type SortField = 'viability_score' | 'last_contact_date' | 'next_followup_date';
+
 export default function LeadsPage() {
-  const { leads, markets, loading } = useLeads();
-  const [filteredLeads, setFilteredLeads] = useState<Lead[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [marketFilter, setMarketFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [showUnassignedOnly, setShowUnassignedOnly] = useState(false);
+  const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
 
+  const [search, setSearch] = useState('');
+  const [stageFilter, setStageFilter] = useState('all');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [hasPhoneFilter, setHasPhoneFilter] = useState(false);
+  const [minScore, setMinScore] = useState(0);
+  const [needsFollowup, setNeedsFollowup] = useState(false);
+  const [sortField, setSortField] = useState<SortField>('viability_score');
+  const [sortAsc, setSortAsc] = useState(false);
+  const [page, setPage] = useState(0);
+
+  // Read URL params on mount
   useEffect(() => {
-    let filtered = leads;
+    if (searchParams.get('has_phone') === 'true') setHasPhoneFilter(true);
+    if (searchParams.get('needs_followup') === 'true') setNeedsFollowup(true);
+    const ms = searchParams.get('min_score');
+    if (ms) setMinScore(parseInt(ms));
+  }, [searchParams]);
 
-    // Search filter
-    if (searchTerm) {
-      filtered = filtered.filter(lead =>
-        (lead.owner_name?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false) ||
-        (lead.owner_email?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false)
-      );
-    }
+  const { data: dealStages } = useQuery({
+    queryKey: ['deal-stages'],
+    queryFn: async () => {
+      const { data } = await supabase.from('deal_stages').select('id, name').order('id');
+      return data || [];
+    },
+  });
 
-    // Market filter
-    if (marketFilter !== 'all') {
-      filtered = filtered.filter(lead => lead.market_id === parseInt(marketFilter));
-    }
+  const { data: sources } = useQuery({
+    queryKey: ['lead-sources'],
+    queryFn: async () => {
+      const { data } = await supabase.from('leads').select('lead_source');
+      if (!data) return [];
+      const unique = [...new Set(data.map((d) => d.lead_source).filter(Boolean))];
+      return unique.sort() as string[];
+    },
+  });
 
-    // Status filter
-    if (statusFilter !== 'all') {
-      filtered = filtered.filter(lead => lead.deal_stage_id === parseInt(statusFilter));
-    }
+  const today = new Date().toISOString().split('T')[0];
 
-    setFilteredLeads(filtered);
-  }, [leads, searchTerm, marketFilter, statusFilter, showUnassignedOnly]);
+  const { data, isLoading } = useQuery({
+    queryKey: ['leads', search, stageFilter, sourceFilter, hasPhoneFilter, minScore, needsFollowup, sortField, sortAsc, page],
+    queryFn: async () => {
+      let query = supabase
+        .from('leads')
+        .select('id, owner_name, owner_address, owner_phone, viability_score, deal_stage_id, last_contact_date, next_followup_date, outreach_count, lead_source, property_data, dnc_listed', { count: 'exact' })
+        .order(sortField, { ascending: sortAsc, nullsFirst: false })
+        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
-  const statsData = {
-    totalLeads: leads.length,
-    unassigned: leads.filter(l => l.status !== 'assigned').length,
-    totalProfit: leads.reduce((sum, l) => {
-      const arv = l.estimated_arv || 0;
-      return sum + arv;
-    }, 0),
-    mainLeads: leads.filter(l => l.market_id === 2).length,
+      if (search) query = query.or(`owner_name.ilike.%${search}%,owner_email.ilike.%${search}%,owner_phone.ilike.%${search}%`);
+      if (stageFilter !== 'all') query = query.eq('deal_stage_id', parseInt(stageFilter));
+      if (sourceFilter !== 'all') query = query.eq('lead_source', sourceFilter);
+      if (hasPhoneFilter) query = query.not('owner_phone', 'is', null).neq('owner_phone', '');
+      if (minScore > 0) query = query.gte('viability_score', minScore);
+      if (needsFollowup) query = query.lte('next_followup_date', today).not('next_followup_date', 'is', null);
+
+      const { data, count, error } = await query;
+      if (error) throw error;
+      return { rows: data || [], total: count || 0 };
+    },
+  });
+
+  const totalPages = Math.ceil((data?.total || 0) / PAGE_SIZE);
+
+  const getStageName = (id: number) => dealStages?.find((s) => s.id === id)?.name || '—';
+
+  const getAddress = (lead: any) => {
+    if (lead.property_data?.property_address) return lead.property_data.property_address;
+    if (lead.property_data?.address) return lead.property_data.address;
+    return lead.owner_address || '—';
   };
+
+  const toggleSort = (field: SortField) => {
+    if (sortField === field) setSortAsc(!sortAsc);
+    else { setSortField(field); setSortAsc(false); }
+    setPage(0);
+  };
+
+  const SortHeader = ({ field, label }: { field: SortField; label: string }) => (
+    <button onClick={() => toggleSort(field)} className="flex items-center gap-1 font-medium">
+      {label}
+      <ArrowUpDown className={`h-3 w-3 ${sortField === field ? 'text-blue-600' : 'text-muted-foreground'}`} />
+    </button>
+  );
 
   return (
     <AppLayout>
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-6">
-            <h1 className="text-4xl font-bold text-slate-900">Leads Pipeline</h1>
-            <button className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition">
-              <Plus className="w-5 h-5" />
-              New Lead
-            </button>
-          </div>
-
-          {/* Stats Grid */}
-          <div className="grid grid-cols-4 gap-4">
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-slate-600 mb-1">Total Leads</p>
-              <p className="text-3xl font-bold text-slate-900">{statsData.totalLeads}</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-slate-600 mb-1">Est. Profit</p>
-              <p className="text-3xl font-bold text-green-600">${(statsData.totalProfit / 1000).toFixed(0)}k</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-slate-600 mb-1">Loading</p>
-              {loading ? <Loader className="w-6 h-6 text-blue-600 animate-spin" /> : <p className="text-3xl font-bold text-slate-900">Ready</p>}
-            </div>
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-slate-600 mb-1">Maine</p>
-              <p className="text-3xl font-bold text-blue-600">{statsData.mainLeads}</p>
-            </div>
-          </div>
+      <div className="max-w-7xl mx-auto space-y-4">
+        <div>
+          <h1 className="text-3xl font-bold">Leads</h1>
+          <p className="text-muted-foreground">{data?.total ?? '...'} total leads</p>
         </div>
 
-        {/* Filters Section */}
-        <div className="bg-white rounded-lg shadow p-4 mb-6">
-          <div className="flex flex-wrap gap-4 items-center">
-            {/* Search */}
-            <div className="flex-1 min-w-64">
-              <div className="relative">
-                <Search className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Search by address or city..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+        {/* Filters */}
+        <Card>
+          <CardContent className="pt-4">
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="flex-1 min-w-[200px]">
+                <label className="text-xs font-medium text-muted-foreground">Search</label>
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input placeholder="Name, email, phone..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} className="pl-8" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Stage</label>
+                <select value={stageFilter} onChange={(e) => { setStageFilter(e.target.value); setPage(0); }} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                  <option value="all">All Stages</option>
+                  {dealStages?.map((s) => <option key={s.id} value={s.id}>{s.name.replace(/_/g, ' ')}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Source</label>
+                <select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); setPage(0); }} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                  <option value="all">All Sources</option>
+                  {sources?.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Min Score</label>
+                <Input type="number" min={0} max={100} value={minScore || ''} placeholder="0" onChange={(e) => { setMinScore(parseInt(e.target.value) || 0); setPage(0); }} className="w-20" />
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant={hasPhoneFilter ? 'default' : 'outline'} onClick={() => { setHasPhoneFilter(!hasPhoneFilter); setPage(0); }} className="gap-1">
+                  <Phone className="h-3 w-3" /> Has Phone
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant={needsFollowup ? 'default' : 'outline'} onClick={() => { setNeedsFollowup(!needsFollowup); setPage(0); }} className="gap-1">
+                  Needs Follow-up
+                </Button>
               </div>
             </div>
+          </CardContent>
+        </Card>
 
-            {/* Market Filter */}
-            <select
-              value={marketFilter}
-              onChange={(e) => setMarketFilter(e.target.value)}
-              className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">All Markets</option>
-              {markets.map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
-
-            {/* Status Filter */}
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">All Status</option>
-              <option value="new">New</option>
-              <option value="contacted">Contacted</option>
-              <option value="negotiating">Negotiating</option>
-              <option value="under_contract">Under Contract</option>
-              <option value="closed">Closed</option>
-            </select>
-
-            {/* Unassigned Only */}
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showUnassignedOnly}
-                onChange={(e) => setShowUnassignedOnly(e.target.checked)}
-                className="w-4 h-4 rounded border-slate-300"
-              />
-              <span className="text-sm text-slate-700">Unassigned Only</span>
-            </label>
-          </div>
-        </div>
-
-        {/* Leads Table */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-slate-900">Address</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-slate-900">Market</th>
-                  <th className="px-6 py-3 text-right text-sm font-semibold text-slate-900">ARV</th>
-                  <th className="px-6 py-3 text-right text-sm font-semibold text-slate-900">Est. Profit</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-slate-900">Lead Status</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-slate-900">Deal Status</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-slate-900">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {loading ? (
-                  <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center">
-                      <Loader className="w-6 h-6 text-blue-600 animate-spin mx-auto mb-2" />
-                      <p className="text-slate-500">Loading leads...</p>
-                    </td>
+        {/* Table */}
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="text-left px-4 py-3 font-medium">Name</th>
+                    <th className="text-left px-4 py-3 font-medium">Address</th>
+                    <th className="text-center px-4 py-3"><SortHeader field="viability_score" label="Score" /></th>
+                    <th className="text-left px-4 py-3 font-medium">Stage</th>
+                    <th className="text-center px-4 py-3 font-medium">Phone</th>
+                    <th className="text-left px-4 py-3"><SortHeader field="last_contact_date" label="Last Contact" /></th>
+                    <th className="text-left px-4 py-3"><SortHeader field="next_followup_date" label="Next Follow-up" /></th>
+                    <th className="text-center px-4 py-3 font-medium">#Out</th>
                   </tr>
-                ) : filteredLeads.length > 0 ? (
-                  filteredLeads.map((lead) => {
-                    const arv = lead.estimated_arv || 0;
-                    const profit = arv * 0.15; // Estimated 15% profit margin for display
-                    const marketName = lead.market?.name || `Market ${lead.market_id}`;
-                    const stageName = lead.deal_stage?.name || 'Unknown';
-                    
-                    return (
-                      <tr key={lead.id} className="hover:bg-slate-50 transition">
-                        <td className="px-6 py-4">
-                          <div>
-                            <p className="font-medium text-slate-900">{lead.owner_name}</p>
-                            <p className="text-sm text-slate-500">{lead.lead_source || 'Direct'}</p>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-slate-700">{marketName}</td>
-                        <td className="px-6 py-4 text-right font-medium text-slate-900">
-                          ${(arv / 1000).toFixed(0)}k
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <span className={`font-medium ${profit > 0 ? 'text-green-600' : 'text-gray-600'}`}>
-                            ${(profit / 1000).toFixed(0)}k
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800`}>
-                            {stageName}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-medium ${lead.status === 'assigned' ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-800'}`}>
-                            {lead.status === 'assigned' ? 'Assigned' : 'Unassigned'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <Link
-                            to={`/leads/${lead.id}`}
-                            className="text-blue-600 hover:text-blue-700 font-medium text-sm"
-                          >
-                            View →
-                          </Link>
-                        </td>
+                </thead>
+                <tbody>
+                  {isLoading ? (
+                    Array.from({ length: 10 }).map((_, i) => (
+                      <tr key={i} className="border-b">
+                        {Array.from({ length: 8 }).map((_, j) => (
+                          <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-20" /></td>
+                        ))}
                       </tr>
-                    );
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
-                      No leads found matching your filters
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                    ))
+                  ) : data?.rows.length === 0 ? (
+                    <tr><td colSpan={8} className="text-center py-12 text-muted-foreground">No leads match your filters.</td></tr>
+                  ) : (
+                    data?.rows.map((lead: any) => {
+                      const stageName = getStageName(lead.deal_stage_id);
+                      const stageColor = STAGE_BADGE_COLORS[stageName] || 'bg-slate-100 text-slate-700';
+                      const isOverdue = lead.next_followup_date && new Date(lead.next_followup_date) <= new Date();
+                      return (
+                        <tr key={lead.id} className="border-b hover:bg-muted/30 transition cursor-pointer" onClick={() => window.location.href = `/leads/${lead.id}`}>
+                          <td className="px-4 py-3">
+                            <Link to={`/leads/${lead.id}`} className="font-medium text-blue-600 hover:underline" onClick={(e) => e.stopPropagation()}>
+                              {lead.owner_name || '—'}
+                            </Link>
+                            {lead.dnc_listed && <Badge variant="destructive" className="ml-2 text-[10px]">DNC</Badge>}
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground text-xs max-w-[200px] truncate">{getAddress(lead)}</td>
+                          <td className="px-4 py-3 text-center"><ScoreBadge score={lead.viability_score} /></td>
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium capitalize ${stageColor}`}>
+                              {stageName.replace(/_/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {lead.owner_phone ? <Check className="h-4 w-4 text-green-500 mx-auto" /> : <X className="h-4 w-4 text-gray-300 mx-auto" />}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground">{lead.last_contact_date ? new Date(lead.last_contact_date).toLocaleDateString() : '—'}</td>
+                          <td className={`px-4 py-3 text-xs ${isOverdue ? 'text-red-600 font-medium' : 'text-muted-foreground'}`}>
+                            {lead.next_followup_date ? new Date(lead.next_followup_date).toLocaleDateString() : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-center text-xs">{lead.outreach_count ?? 0}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              Page {page + 1} of {totalPages} · {data?.total.toLocaleString()} leads
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(page - 1)}>
+                <ChevronLeft className="h-4 w-4 mr-1" /> Previous
+              </Button>
+              <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage(page + 1)}>
+                Next <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </AppLayout>
   );

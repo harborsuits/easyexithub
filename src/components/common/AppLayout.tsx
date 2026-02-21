@@ -5,23 +5,23 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import {
   LayoutDashboard,
-  Layers,
+  Building2,
   Users,
   Plus,
   Menu,
   X,
-  FileText,
-  TrendingUp,
+  Layers,
   Upload,
-  Search,
+  PhoneCall,
 } from 'lucide-react';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/leads', icon: Users, label: 'Leads' },
   { to: '/pipeline', icon: Layers, label: 'Pipeline' },
-  { to: '/buyers', icon: Users, label: 'Buyers' },
-  { to: '/deals', icon: TrendingUp, label: 'Deals' },
-  { to: '/scraper', icon: Search, label: 'Scraper' },
+  { to: '/calls', icon: PhoneCall, label: 'Calls' },
+  { to: '/properties', icon: Building2, label: 'Properties' },
+  { to: '/imports', icon: Upload, label: 'Imports' },
 ];
 
 interface AppLayoutProps {
@@ -35,7 +35,6 @@ export function AppLayout({ children, onAddLead }: AppLayoutProps) {
 
   return (
     <div className="min-h-screen flex w-full">
-      {/* Mobile overlay */}
       {sidebarOpen && (
         <div
           className="fixed inset-0 bg-black/50 z-40 lg:hidden"
@@ -43,7 +42,6 @@ export function AppLayout({ children, onAddLead }: AppLayoutProps) {
         />
       )}
 
-      {/* Sidebar */}
       <aside
         className={cn(
           'fixed lg:static inset-y-0 left-0 z-50 w-64 bg-sidebar border-r border-sidebar-border transition-transform lg:translate-x-0',
@@ -65,7 +63,8 @@ export function AppLayout({ children, onAddLead }: AppLayoutProps) {
 
           <nav className="flex-1 p-4 space-y-1">
             {navItems.map((item) => {
-              const isActive = location.pathname === item.to;
+              const isActive = location.pathname === item.to || 
+                (item.to !== '/' && location.pathname.startsWith(item.to));
               return (
                 <NavLink
                   key={item.to}
@@ -96,7 +95,6 @@ export function AppLayout({ children, onAddLead }: AppLayoutProps) {
         </div>
       </aside>
 
-      {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-14 border-b border-border bg-card flex items-center px-4 gap-4 sticky top-0 z-30">
           <Button
