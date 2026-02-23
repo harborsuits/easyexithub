@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronUp, PhoneCall, Clock } from 'lucide-react';
+import { FormattedSummary } from '@/utils/formatSummary';
 
 const OUTCOME_COLORS: Record<string, string> = {
   interested: 'bg-green-100 text-green-800',
@@ -129,7 +130,7 @@ export default function CallLogPage() {
                               <span className="text-xs text-muted-foreground">${Number(cost).toFixed(2)}</span>
                             )}
                           </div>
-                          <p className="text-sm text-muted-foreground mt-1">{call.summary || '—'}</p>
+                          <div className="mt-1"><FormattedSummary text={call.summary || ''} /></div>
                           {hasTranscript && (
                             <>
                               <button

@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Users, Phone, PhoneCall, CalendarClock, ArrowRight, Flame, PhoneMissed, Clock } from 'lucide-react';
+import { FormattedSummary } from '@/utils/formatSummary';
 
 const STAGE_COLORS: Record<string, string> = {
   raw_lead: '#94a3b8',
@@ -239,7 +240,7 @@ export default function UnifiedDashboard() {
                             </span>
                           )}
                         </div>
-                        <p className="text-muted-foreground text-xs whitespace-pre-line">{c.summary || '—'}</p>
+                        <FormattedSummary text={c.summary || ''} />
                       </div>
                       <span className="text-xs text-muted-foreground whitespace-nowrap">{c.contact_date || '—'}</span>
                     </div>
