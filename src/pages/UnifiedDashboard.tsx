@@ -94,10 +94,18 @@ export default function UnifiedDashboard() {
         .limit(10);
       if (!data || data.length === 0) return [];
       const leadIds = [...new Set(data.map(c => c.lead_id).filter(Boolean))];
-      const { data: leadNames } = await supabase.from('leads').select('id, owner_name').in('id', leadIds);
-      const nameMap: Record<number, string> = {};
-      leadNames?.forEach(l => { nameMap[l.id] = l.owner_name || `Lead #${l.id}`; });
-      return data.map(c => ({ ...c, lead_name: nameMap[c.lead_id] || `Lead #${c.lead_id}` }));
+      const { data: leadRows } = await supabase.from('leads').select('id, owner_name, property_data, owner_address').in('id', leadIds);
+      const leadMap: Record<number, any> = {};
+      leadRows?.forEach(l => { leadMap[l.id] = l; });
+      return data.map(c => {
+        const lead = leadMap[c.lead_id];
+        const name = lead?.owner_name || `Lead #${c.lead_id}`;
+        let pd: any = {};
+        try { pd = typeof lead?.property_data === 'string' ? JSON.parse(lead.property_data) : (lead?.property_data || {}); } catch {}
+        const addr = pd.address || lead?.owner_address || '';
+        const arv = pd.arv || pd.estimated_value || '';
+        return { ...c, lead_name: name, property_address: addr, arv };
+      });
     },
   });
 
@@ -240,6 +248,13 @@ export default function UnifiedDashboard() {
                             </span>
                           )}
                         </div>
+                        {(c.property_address || c.arv) && (
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {c.property_address && <><span className="font-semibold text-foreground">Property:</span> {c.property_address}</>}
+                            {c.property_address && c.arv && <span className="mx-1 text-muted-foreground/50">|</span>}
+                            {c.arv && <><span className="font-semibold text-foreground">ARV:</span> ${Number(c.arv).toLocaleString()}</>}
+                          </p>
+                        )}
                         <FormattedSummary text={c.summary || ''} />
                       </div>
                       <span className="text-xs text-muted-foreground whitespace-nowrap">{c.contact_date || '—'}</span>

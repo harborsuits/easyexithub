@@ -42,11 +42,19 @@ export default function CallLogPage() {
       if (!data || data.length === 0) return [];
 
       const leadIds = [...new Set(data.map(c => c.lead_id).filter(Boolean))];
-      const { data: leads } = await supabase.from('leads').select('id, owner_name').in('id', leadIds);
-      const nameMap: Record<number, string> = {};
-      leads?.forEach(l => { nameMap[l.id] = l.owner_name || `Lead #${l.id}`; });
+      const { data: leads } = await supabase.from('leads').select('id, owner_name, property_data, owner_address').in('id', leadIds);
+      const leadMap: Record<number, any> = {};
+      leads?.forEach(l => { leadMap[l.id] = l; });
 
-      return data.map(c => ({ ...c, lead_name: nameMap[c.lead_id] || `Lead #${c.lead_id}` }));
+      return data.map(c => {
+        const lead = leadMap[c.lead_id];
+        const name = lead?.owner_name || `Lead #${c.lead_id}`;
+        let pd: any = {};
+        try { pd = typeof lead?.property_data === 'string' ? JSON.parse(lead.property_data) : (lead?.property_data || {}); } catch {}
+        const addr = pd.address || lead?.owner_address || '';
+        const arv = pd.arv || pd.estimated_value || '';
+        return { ...c, lead_name: name, property_address: addr, arv };
+      });
     },
   });
 
@@ -130,6 +138,13 @@ export default function CallLogPage() {
                               <span className="text-xs text-muted-foreground">${Number(cost).toFixed(2)}</span>
                             )}
                           </div>
+                          {(call.property_address || call.arv) && (
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {call.property_address && <><span className="font-semibold text-foreground">Property:</span> {call.property_address}</>}
+                              {call.property_address && call.arv && <span className="mx-1 text-muted-foreground/50">|</span>}
+                              {call.arv && <><span className="font-semibold text-foreground">ARV:</span> ${Number(call.arv).toLocaleString()}</>}
+                            </p>
+                          )}
                           <div className="mt-1"><FormattedSummary text={call.summary || ''} /></div>
                           {hasTranscript && (
                             <>
