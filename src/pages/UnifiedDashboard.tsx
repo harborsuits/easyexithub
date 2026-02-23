@@ -88,8 +88,8 @@ export default function UnifiedDashboard() {
     queryFn: async () => {
       const { data } = await supabase
         .from('communications')
-        .select('id, lead_id, contact_date, outcome, summary, communication_type_id, duration_minutes')
-        .order('created_at', { ascending: false })
+        .select('id, lead_id, contact_date, contact_time, outcome, summary, communication_type_id, duration_minutes')
+        .order('id', { ascending: false })
         .limit(10);
       if (!data || data.length === 0) return [];
       const leadIds = [...new Set(data.map(c => c.lead_id).filter(Boolean))];
@@ -239,7 +239,7 @@ export default function UnifiedDashboard() {
                             </span>
                           )}
                         </div>
-                        <p className="text-muted-foreground text-xs truncate">{c.summary || '—'}</p>
+                        <p className="text-muted-foreground text-xs whitespace-pre-line">{c.summary || '—'}</p>
                       </div>
                       <span className="text-xs text-muted-foreground whitespace-nowrap">{c.contact_date || '—'}</span>
                     </div>
