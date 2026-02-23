@@ -31,7 +31,7 @@ export default function CallLogPage() {
         .from('communications')
         .select('id, lead_id, contact_date, contact_time, outcome, summary, duration_minutes, notes, created_at')
         .eq('communication_type_id', 1)
-        .order('contact_date', { ascending: false, nullsFirst: false });
+        .order('created_at', { ascending: false });
 
       if (outcomeFilter !== 'all') query = query.eq('outcome', outcomeFilter);
       if (dateFrom) query = query.gte('contact_date', dateFrom);
@@ -163,7 +163,10 @@ export default function CallLogPage() {
                             </>
                           )}
                         </div>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap">{call.contact_date || '—'}</span>
+                        <span className="text-xs text-muted-foreground whitespace-nowrap text-right">
+                          {call.contact_date || '—'}
+                          {call.contact_time && <><br />{call.contact_time.slice(0, 5)}</>}
+                        </span>
                       </div>
                     </div>
                   );

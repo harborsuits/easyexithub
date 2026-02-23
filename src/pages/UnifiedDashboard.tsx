@@ -257,7 +257,10 @@ export default function UnifiedDashboard() {
                         )}
                         <FormattedSummary text={c.summary || ''} />
                       </div>
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">{c.contact_date || '—'}</span>
+                      <span className="text-xs text-muted-foreground whitespace-nowrap text-right">
+                        {c.contact_date || '—'}
+                        {c.contact_time && <><br />{c.contact_time.slice(0, 5)}</>}
+                      </span>
                     </div>
                   ))}
                 </div>
