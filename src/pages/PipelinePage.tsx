@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
-import { Flame, Snowflake, ThermometerSun, Skull, Phone, Mail, Clock, ArrowRight } from 'lucide-react';
+import { Flame, Snowflake, ThermometerSun, Skull, Phone, Mail, Clock, ArrowRight, LayoutGrid, CalendarDays } from 'lucide-react';
+import { PipelineCalendar } from '@/components/pipeline/PipelineCalendar';
 
 const STAGE_COLORS: Record<string, string> = {
   raw_lead: 'bg-slate-100 border-slate-300',
@@ -78,6 +79,7 @@ function getCallSummary(lead: any, latestComm: any): string {
 export function PipelinePage() {
   const queryClient = useQueryClient();
   const [draggedLead, setDraggedLead] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<'board' | 'calendar'>('board');
 
   const { data: stages } = useQuery({
     queryKey: ['deal-stages'],
@@ -141,10 +143,40 @@ export function PipelinePage() {
   return (
     <AppLayout>
       <div className="max-w-full mx-auto space-y-4">
-        <h1 className="text-3xl font-bold">Pipeline</h1>
-        <p className="text-muted-foreground">Drag leads between stages · Temperature shows conversation direction</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Pipeline</h1>
+            <p className="text-muted-foreground">
+              {activeTab === 'board'
+                ? 'Drag leads between stages · Temperature shows conversation direction'
+                : 'Scheduled follow-ups and callbacks'}
+            </p>
+          </div>
+          <div className="flex items-center bg-muted rounded-lg p-1">
+            <button
+              onClick={() => setActiveTab('board')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                activeTab === 'board' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <LayoutGrid className="h-4 w-4" />
+              Board
+            </button>
+            <button
+              onClick={() => setActiveTab('calendar')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                activeTab === 'calendar' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <CalendarDays className="h-4 w-4" />
+              Calendar
+            </button>
+          </div>
+        </div>
 
-        <div className="flex gap-3 overflow-x-auto pb-4" style={{ minHeight: '70vh' }}>
+        {activeTab === 'calendar' && <PipelineCalendar />}
+
+        {activeTab === 'board' && <div className="flex gap-3 overflow-x-auto pb-4" style={{ minHeight: '70vh' }}>
           {stages?.map((stage) => {
             const stageLeads = leads?.filter((l) => l.deal_stage_id === stage.id) || [];
             const colorClass = STAGE_COLORS[stage.name] || 'bg-muted border-border';
@@ -266,7 +298,7 @@ export function PipelinePage() {
               </div>
             );
           })}
-        </div>
+        </div>}
       </div>
     </AppLayout>
   );
