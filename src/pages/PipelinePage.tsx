@@ -93,7 +93,7 @@ export function PipelinePage() {
     queryKey: ['leads-pipeline'],
     queryFn: async () => {
       const { data } = await supabase.from('leads').select(
-        'id, owner_name, owner_phone, owner_email, deal_stage_id, viability_score, status, property_data, next_followup_date, last_contact_date, outreach_count, motivation_type'
+        'id, owner_name, owner_phone, owner_email, deal_stage_id, viability_score, status, property_data, next_followup_date, last_contact_date, outreach_count, motivation_type, callable'
       );
       return data || [];
     },
@@ -262,7 +262,7 @@ export function PipelinePage() {
                           </div>
                         )}
 
-                        {/* Footer: Score + contact info indicators */}
+                        {/* Footer: Score + callable + contact info indicators */}
                         <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-gray-100">
                           <div className="flex items-center gap-1.5">
                             {lead.viability_score != null && (
@@ -273,6 +273,9 @@ export function PipelinePage() {
                               }`}>
                                 {lead.viability_score}
                               </Badge>
+                            )}
+                            {lead.callable && (
+                              <span className="inline-flex items-center px-1 py-0.5 rounded text-[9px] font-semibold bg-emerald-100 text-emerald-700">CALLABLE</span>
                             )}
                             {lead.outreach_count > 0 && (
                               <span className="text-[10px] text-muted-foreground">{lead.outreach_count}× contacted</span>

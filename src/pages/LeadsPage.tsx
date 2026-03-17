@@ -7,7 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Search, Phone, PhoneOff, ChevronLeft, ChevronRight, Check, X, ArrowUpDown } from 'lucide-react';
+import { Search, Phone, PhoneOff, ChevronLeft, ChevronRight, Check, X, ArrowUpDown, Target } from 'lucide-react';
 
 const PAGE_SIZE = 50;
 
@@ -43,6 +43,7 @@ export default function LeadsPage() {
   const [stageFilter, setStageFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [hasPhoneFilter, setHasPhoneFilter] = useState(false);
+  const [callableOnly, setCallableOnly] = useState(false);
   const [minScore, setMinScore] = useState(0);
   const [needsFollowup, setNeedsFollowup] = useState(false);
   const [sortField, setSortField] = useState<SortField>('viability_score');
@@ -52,6 +53,7 @@ export default function LeadsPage() {
   // Read URL params on mount
   useEffect(() => {
     if (searchParams.get('has_phone') === 'true') setHasPhoneFilter(true);
+    if (searchParams.get('callable') === 'true') setCallableOnly(true);
     if (searchParams.get('needs_followup') === 'true') setNeedsFollowup(true);
     const ms = searchParams.get('min_score');
     if (ms) setMinScore(parseInt(ms));
@@ -78,11 +80,11 @@ export default function LeadsPage() {
   const today = new Date().toISOString().split('T')[0];
 
   const { data, isLoading } = useQuery({
-    queryKey: ['leads', search, stageFilter, sourceFilter, hasPhoneFilter, minScore, needsFollowup, sortField, sortAsc, page],
+    queryKey: ['leads', search, stageFilter, sourceFilter, hasPhoneFilter, callableOnly, minScore, needsFollowup, sortField, sortAsc, page],
     queryFn: async () => {
       let query = supabase
         .from('leads')
-        .select('id, owner_name, owner_address, owner_phone, viability_score, deal_stage_id, last_contact_date, next_followup_date, outreach_count, lead_source, property_data, dnc_listed', { count: 'exact' })
+        .select('id, owner_name, owner_address, owner_phone, viability_score, deal_stage_id, last_contact_date, next_followup_date, outreach_count, lead_source, property_data, dnc_listed, callable', { count: 'exact' })
         .order(sortField, { ascending: sortAsc, nullsFirst: false })
         .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
@@ -90,6 +92,7 @@ export default function LeadsPage() {
       if (stageFilter !== 'all') query = query.eq('deal_stage_id', parseInt(stageFilter));
       if (sourceFilter !== 'all') query = query.eq('lead_source', sourceFilter);
       if (hasPhoneFilter) query = query.not('owner_phone', 'is', null).neq('owner_phone', '');
+      if (callableOnly) query = query.eq('callable', true);
       if (minScore > 0) query = query.gte('viability_score', minScore);
       if (needsFollowup) query = query.lte('next_followup_date', today).not('next_followup_date', 'is', null);
 
@@ -160,6 +163,11 @@ export default function LeadsPage() {
                 <Input type="number" min={0} max={100} value={minScore || ''} placeholder="0" onChange={(e) => { setMinScore(parseInt(e.target.value) || 0); setPage(0); }} className="w-20" />
               </div>
               <div className="flex items-center gap-2">
+                <Button size="sm" variant={callableOnly ? 'default' : 'outline'} onClick={() => { setCallableOnly(!callableOnly); setPage(0); }} className="gap-1">
+                  <Target className="h-3 w-3" /> Callable
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
                 <Button size="sm" variant={hasPhoneFilter ? 'default' : 'outline'} onClick={() => { setHasPhoneFilter(!hasPhoneFilter); setPage(0); }} className="gap-1">
                   <Phone className="h-3 w-3" /> Has Phone
                 </Button>
@@ -212,6 +220,7 @@ export default function LeadsPage() {
                             <Link to={`/leads/${lead.id}`} className="font-medium text-blue-600 hover:underline" onClick={(e) => e.stopPropagation()}>
                               {lead.owner_name || '—'}
                             </Link>
+                            {lead.callable && <Badge className="ml-2 text-[10px] bg-emerald-100 text-emerald-700 hover:bg-emerald-100">Callable</Badge>}
                             {lead.dnc_listed && <Badge variant="destructive" className="ml-2 text-[10px]">DNC</Badge>}
                           </td>
                           <td className="px-4 py-3 text-muted-foreground text-xs max-w-[200px] truncate">{getAddress(lead)}</td>

@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Users, Phone, PhoneCall, CalendarClock, ArrowRight, Flame, PhoneMissed, Clock } from 'lucide-react';
+import { Users, Phone, PhoneCall, CalendarClock, ArrowRight, Flame, PhoneMissed, Clock, Target } from 'lucide-react';
 import { FormattedSummary } from '@/utils/formatSummary';
 
 const STAGE_COLORS: Record<string, string> = {
@@ -64,6 +64,14 @@ export default function UnifiedDashboard() {
     queryKey: ['kpi-followups-due'],
     queryFn: async () => {
       const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).lte('next_followup_date', today).not('next_followup_date', 'is', null);
+      return count || 0;
+    },
+  });
+
+  const { data: callableLeads, isLoading: l5 } = useQuery({
+    queryKey: ['kpi-callable-leads'],
+    queryFn: async () => {
+      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('callable', true);
       return count || 0;
     },
   });
@@ -158,7 +166,7 @@ export default function UnifiedDashboard() {
         </div>
 
         {/* KPI Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <Card className="bg-blue-50/50 border-blue-200">
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
@@ -167,6 +175,17 @@ export default function UnifiedDashboard() {
                   {l1 ? <Skeleton className="h-9 w-20 mt-1" /> : <p className="text-3xl font-bold text-blue-900">{totalLeads?.toLocaleString()}</p>}
                 </div>
                 <Users className="h-8 w-8 text-blue-500 opacity-60" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="bg-emerald-50/50 border-emerald-200">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-emerald-600 font-medium">Callable</p>
+                  {l5 ? <Skeleton className="h-9 w-16 mt-1" /> : <p className="text-3xl font-bold text-emerald-900">{callableLeads?.toLocaleString()}</p>}
+                </div>
+                <Target className="h-8 w-8 text-emerald-500 opacity-60" />
               </div>
             </CardContent>
           </Card>
