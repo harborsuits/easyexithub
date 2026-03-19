@@ -110,6 +110,8 @@ export function PipelineCalendar() {
         .not('status', 'eq', 'dead');
       return data || [];
     },
+    refetchOnWindowFocus: true,
+    staleTime: 30000, // Consider data fresh for 30s, then refetch
   });
 
   const leadIds = leads?.map(l => l.id) || [];
@@ -184,8 +186,9 @@ export function PipelineCalendar() {
       
       if (updateError) throw updateError;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['calendar-leads'] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['calendar-leads'] });
+      await queryClient.refetchQueries({ queryKey: ['calendar-leads'] });
       toast.success('Follow-up rescheduled');
     },
     onError: () => toast.error('Failed to reschedule'),
@@ -423,6 +426,25 @@ export function PipelineCalendar() {
                               {lead.owner_phone}
                             </span>
                           )}
+                          {/* Engagement level badge */}
+                          {(() => {
+                            const raw = lead._raw;
+                            const engLevel = raw?.engagement_level;
+                            const coldAttempts = raw?.cold_attempts ?? 0;
+                            
+                            if (engLevel === 'hot') {
+                              return <Badge className="text-[10px] bg-red-100 text-red-700">🔥 Unlimited</Badge>;
+                            } else if (engLevel === 'warm') {
+                              return <Badge className="text-[10px] bg-orange-100 text-orange-700">🌡️ Unlimited</Badge>;
+                            } else if (engLevel === 'cold' && coldAttempts > 0) {
+                              return <Badge variant="outline" className="text-[10px] text-blue-600">❄️ {coldAttempts}/3</Badge>;
+                            } else if (engLevel === 'dead') {
+                              return <Badge className="text-[10px] bg-gray-200 text-gray-600">💀 Blocked</Badge>;
+                            } else if (engLevel === 'dnc') {
+                              return <Badge className="text-[10px] bg-red-200 text-red-700">🚫 DNC</Badge>;
+                            }
+                            return null;
+                          })()}
                         </div>
                         {lead.lastCommSummary && (
                           <p className="text-[11px] text-gray-500 mt-1.5 line-clamp-2">

@@ -1,0 +1,2 @@
+-- Historical migration from remote database
+-- This migration was applied prior to linking the project locally
