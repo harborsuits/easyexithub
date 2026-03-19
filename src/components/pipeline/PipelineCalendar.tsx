@@ -147,8 +147,42 @@ export function PipelineCalendar() {
   // Reschedule mutation
   const reschedule = useMutation({
     mutationFn: async ({ leadId, date }: { leadId: number; date: string }) => {
-      const { error } = await supabase.from('leads').update({ next_followup_date: date }).eq('id', leadId);
-      if (error) throw error;
+      // 1. Cancel any existing pending follow-ups for this lead
+      const { error: cancelError } = await supabase
+        .from('follow_ups')
+        .update({ 
+          status: 'canceled', 
+          canceled_at: new Date().toISOString(),
+          notes: 'Superseded by manual reschedule' 
+        })
+        .eq('lead_id', leadId)
+        .eq('status', 'pending');
+      
+      if (cancelError) throw cancelError;
+
+      // 2. Create new follow-up row with updated date
+      const scheduledFor = new Date(date + 'T09:00:00-05:00').toISOString(); // 9 AM ET
+      const { error: insertError } = await supabase
+        .from('follow_ups')
+        .insert({
+          lead_id: leadId,
+          kind: 'callback',
+          source: 'manual_reschedule',
+          status: 'pending',
+          priority: 50,
+          reason: 'Manual reschedule via calendar',
+          scheduled_for: scheduledFor,
+        });
+      
+      if (insertError) throw insertError;
+
+      // 3. Update leads table for calendar display
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({ next_followup_date: date })
+        .eq('id', leadId);
+      
+      if (updateError) throw updateError;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['calendar-leads'] });
