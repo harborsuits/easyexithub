@@ -12,6 +12,7 @@ import DealsPage from "./pages/DealsPage";
 import { BuyersPage } from "./pages/BuyersPage";
 import ImportRunsPage from "./pages/ImportRunsPage";
 import CallLogPage from "./pages/CallLogPage";
+import DialQueuePage from "./pages/DialQueuePage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -28,6 +29,7 @@ const App = () => (
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/leads/:id" element={<LeadDetailPage />} />
           <Route path="/pipeline" element={<PipelinePage />} />
+          <Route path="/queue" element={<DialQueuePage />} />
           <Route path="/deals" element={<DealsPage />} />
           <Route path="/buyers" element={<BuyersPage />} />
           <Route path="/imports" element={<ImportRunsPage />} />

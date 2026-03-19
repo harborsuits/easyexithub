@@ -13,12 +13,14 @@ import {
   Layers,
   Upload,
   PhoneCall,
+  ListOrdered,
 } from 'lucide-react';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/leads', icon: Users, label: 'Leads' },
   { to: '/pipeline', icon: Layers, label: 'Pipeline' },
+  { to: '/queue', icon: ListOrdered, label: 'Dial Queue' },
   { to: '/calls', icon: PhoneCall, label: 'Calls' },
   { to: '/properties', icon: Building2, label: 'Properties' },
   { to: '/imports', icon: Upload, label: 'Imports' },

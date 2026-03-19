@@ -52,18 +52,23 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         assistantId: VAPI_ASSISTANT_ID,
+        phoneNumberId: Deno.env.get("VAPI_PHONE_NUMBER_ID") || "93be402f-255a-4706-bd77-ce3f40a785d4",
         customer: {
-          number: lead.owner_phone,
+          number: toE164(lead.owner_phone),
         },
         // Pass lead context as variables
         assistantOverrides: {
           variableValues: {
-            firstName: extractFirstName(lead.owner_name),
-            ownerName: lead.owner_name,
-            propertyAddress: getPropertyAddress(lead.property_data),
+            firstName: extractFirstName(lead.owner_name) || "there",
+            ownerName: lead.owner_name || "",
+            propertyAddress: getPropertyAddress(lead.property_data) || "your property",
             leadId: String(lead.id),
           }
-        }
+        },
+        metadata: {
+          lead_id: lead.id,
+          source: "easyexit-trigger-call",
+        },
       }),
     });
 
@@ -151,15 +156,42 @@ function getBlockReason(lead: any): string {
 
 function extractFirstName(ownerName: string): string {
   if (!ownerName) return "";
-  
-  // Handle formats: "LAST, FIRST MIDDLE" or "First Last"
-  if (ownerName.includes(",")) {
-    const parts = ownerName.split(",");
+
+  // Clean up: remove trailing "&", extra spaces
+  const clean = ownerName.replace(/\s*&\s*$/, "").replace(/\s+/g, " ").trim();
+
+  // Format 1: "LAST, FIRST MIDDLE" — comma separated
+  if (clean.includes(",")) {
+    const parts = clean.split(",");
     const firstPart = parts[1]?.trim() || "";
-    return firstPart.split(" ")[0] || "";
+    const firstName = firstPart.split(" ")[0] || "";
+    // Title case: "ANTHONY" → "Anthony"
+    return titleCase(firstName);
   }
-  
-  return ownerName.split(" ")[0] || ownerName;
+
+  // Format 2: "LAST FIRST MIDDLE" or "Last First" — no comma, LAST is first word
+  // Property records almost always put last name first
+  const words = clean.split(" ").filter(Boolean);
+  if (words.length >= 2) {
+    // Second word is the first name
+    return titleCase(words[1]);
+  }
+
+  return titleCase(words[0] || "");
+}
+
+function titleCase(s: string): string {
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+function toE164(phone: string): string {
+  if (!phone) return "";
+  const digits = phone.replace(/[^0-9]/g, "");
+  if (digits.length === 10) return "+1" + digits;
+  if (digits.length === 11 && digits.startsWith("1")) return "+" + digits;
+  if (phone.startsWith("+")) return phone;
+  return "+1" + digits;
 }
 
 function getPropertyAddress(propertyData: any): string {
