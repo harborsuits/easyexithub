@@ -91,6 +91,11 @@ interface CalendarLead {
   estimated_arv: number | null;
   deal_stage_id: number | null;
   property_data: any;
+  pipeline_stage: string | null;
+  next_action_type: string | null;
+  next_action_at: string | null;
+  handoff_status: string | null;
+  last_disposition: string | null;
   _raw: any;
 }
 
@@ -103,15 +108,17 @@ export function PipelineCalendar() {
   const { data: leads } = useQuery({
     queryKey: ['calendar-leads'],
     queryFn: async () => {
+      // Fetch leads that have either next_followup_date OR next_action_at
+      // This ensures human follow-up work shows on the calendar too
       const { data } = await supabase
         .from('leads')
-        .select('id, owner_name, owner_phone, next_followup_date, deal_stage_id, viability_score, status, property_data, outreach_count, estimated_arv')
-        .not('next_followup_date', 'is', null)
-        .not('status', 'eq', 'dead');
+        .select('id, owner_name, owner_phone, next_followup_date, deal_stage_id, viability_score, status, property_data, outreach_count, estimated_arv, pipeline_stage, next_action_type, next_action_at, handoff_status, last_disposition, engagement_level')
+        .or('next_followup_date.not.is.null,next_action_at.not.is.null')
+        .not('status', 'in', '(dead,dnc,suppressed)');
       return data || [];
     },
     refetchOnWindowFocus: true,
-    staleTime: 30000, // Consider data fresh for 30s, then refetch
+    staleTime: 30000,
   });
 
   const leadIds = leads?.map(l => l.id) || [];
@@ -178,10 +185,13 @@ export function PipelineCalendar() {
       
       if (insertError) throw insertError;
 
-      // 3. Update leads table for calendar display
+      // 3. Update leads table for calendar display (both fields)
       const { error: updateError } = await supabase
         .from('leads')
-        .update({ next_followup_date: date })
+        .update({ 
+          next_followup_date: date,
+          next_action_at: scheduledFor,
+        })
         .eq('id', leadId);
       
       if (updateError) throw updateError;
@@ -212,28 +222,49 @@ export function PipelineCalendar() {
 
   const calendarLeads: CalendarLead[] = useMemo(() => {
     if (!leads) return [];
-    return leads.map(lead => {
-      const pd = parsePropertyData(lead.property_data);
-      const addr = pd?.address || pd?.property_address || '';
-      const city = pd?.city || pd?.town || '';
-      return {
-        id: lead.id,
-        owner_name: lead.owner_name || `Lead #${lead.id}`,
-        owner_phone: lead.owner_phone,
-        next_followup_date: lead.next_followup_date,
-        temperature: getLeadTemperature(lead),
-        callType: getCallType(lead),
-        address: addr + (city ? `, ${city}` : ''),
-        viability_score: lead.viability_score,
-        lastCommSummary: latestComms?.[lead.id] || '',
-        needsBen: needsBen(lead),
-        onHold: isOnHold(lead),
-        estimated_arv: lead.estimated_arv,
-        deal_stage_id: lead.deal_stage_id,
-        property_data: lead.property_data,
-        _raw: lead,
-      };
-    });
+    return leads
+      .map(lead => {
+        const pd = parsePropertyData(lead.property_data);
+        const addr = pd?.address || pd?.property_address || '';
+        const city = pd?.city || pd?.town || '';
+        
+        // Use next_followup_date if available, otherwise next_action_at
+        // This ensures human follow-ups and interested leads show on calendar
+        const followupDate = lead.next_followup_date || 
+          (lead.next_action_at ? lead.next_action_at.split('T')[0] : null);
+        
+        if (!followupDate) return null;
+
+        // Determine call type from next_action_type if available
+        let callType = getCallType(lead);
+        if (lead.next_action_type === 'human_followup') callType = '🔥 human follow-up';
+        else if (lead.next_action_type === 'scheduled_callback') callType = 'callback';
+        else if (lead.next_action_type === 'retry_call') callType = 'retry';
+
+        return {
+          id: lead.id,
+          owner_name: lead.owner_name || `Lead #${lead.id}`,
+          owner_phone: lead.owner_phone,
+          next_followup_date: followupDate,
+          temperature: getLeadTemperature(lead),
+          callType,
+          address: addr + (city ? `, ${city}` : ''),
+          viability_score: lead.viability_score,
+          lastCommSummary: latestComms?.[lead.id] || '',
+          needsBen: needsBen(lead),
+          onHold: isOnHold(lead),
+          estimated_arv: lead.estimated_arv,
+          deal_stage_id: lead.deal_stage_id,
+          property_data: lead.property_data,
+          pipeline_stage: lead.pipeline_stage,
+          next_action_type: lead.next_action_type,
+          next_action_at: lead.next_action_at,
+          handoff_status: lead.handoff_status,
+          last_disposition: lead.last_disposition,
+          _raw: lead,
+        };
+      })
+      .filter((lead): lead is CalendarLead => lead !== null);
   }, [leads, latestComms]);
 
   // Sort function for leads within a day
@@ -445,6 +476,14 @@ export function PipelineCalendar() {
                             }
                             return null;
                           })()}
+                          {/* Handoff status badge */}
+                          {lead.handoff_status === 'pending' && (
+                            <Badge className="text-[10px] bg-purple-100 text-purple-700 animate-pulse">⚡ Handoff Pending</Badge>
+                          )}
+                          {/* Last disposition */}
+                          {lead.last_disposition && (
+                            <Badge variant="outline" className="text-[10px]">{lead.last_disposition}</Badge>
+                          )}
                         </div>
                         {lead.lastCommSummary && (
                           <p className="text-[11px] text-gray-500 mt-1.5 line-clamp-2">

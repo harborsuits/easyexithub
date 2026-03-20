@@ -67,7 +67,8 @@ export function CRMProvider({ children }: { children: React.ReactNode }) {
     fetchLeads();
   }, []);
 
-  const updateLeadStage = useCallback((leadId: string, newStage: PipelineStage) => {
+  const updateLeadStage = useCallback(async (leadId: string, newStage: PipelineStage) => {
+    // Optimistic local update
     setLeads((prev) =>
       prev.map((lead) =>
         lead.id === leadId
@@ -75,6 +76,18 @@ export function CRMProvider({ children }: { children: React.ReactNode }) {
           : lead
       )
     );
+    // Persist to Supabase — write pipeline_stage (business state)
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .update({ pipeline_stage: newStage, updated_at: new Date().toISOString() })
+        .eq('id', Number(leadId));
+      if (error) {
+        console.error('Error updating pipeline_stage:', error);
+      }
+    } catch (err) {
+      console.error('Exception updating pipeline_stage:', err);
+    }
   }, []);
 
   const updateLead = useCallback((leadId: string, updates: Partial<Lead>) => {

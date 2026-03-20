@@ -15,19 +15,16 @@ export function PipelineColumn({ stage, leads, onLeadClick }: PipelineColumnProp
   const stageConfig = PIPELINE_STAGES.find((s) => s.id === stage);
 
   const stageColorClass = {
-    'raw': 'bg-stage-raw',
-    'researched': 'bg-stage-researched',
-    'contact-ready': 'bg-stage-contact-ready',
-    'contacted': 'bg-stage-contacted',
-    'responding': 'bg-stage-responding',
-    'offer-made': 'bg-stage-offer',
+    'new': 'bg-stage-raw',
+    'attempting_contact': 'bg-stage-contacted',
+    'follow_up_scheduled': 'bg-stage-researched',
+    'callback_pending': 'bg-stage-responding',
+    'needs_human_followup': 'bg-stage-offer',
+    'offer_prep': 'bg-stage-negotiating',
     'negotiating': 'bg-stage-negotiating',
-    'under-contract': 'bg-stage-contract',
-    'buyer-matched': 'bg-stage-matched',
-    'assigned': 'bg-stage-assigned',
-    'closing': 'bg-stage-closing',
-    'closed': 'bg-stage-closed',
-    'dead': 'bg-stage-dead',
+    'under_contract': 'bg-stage-contract',
+    'closed_won': 'bg-stage-closed',
+    'closed_lost': 'bg-stage-dead',
   }[stage];
 
   return (

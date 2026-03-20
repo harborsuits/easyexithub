@@ -47,13 +47,32 @@ export function LeadCard({ lead, onClick }: LeadCardProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-xs">
-          <Badge variant="secondary" className="font-normal">
-            {lead.beds}bd / {lead.baths}ba
-          </Badge>
-          <Badge variant="secondary" className="font-normal">
-            {lead.sqft.toLocaleString()} sqft
-          </Badge>
+        <div className="flex items-center gap-2 text-xs flex-wrap">
+          {lead.beds > 0 && (
+            <Badge variant="secondary" className="font-normal">
+              {lead.beds}bd / {lead.baths}ba
+            </Badge>
+          )}
+          {lead.sqft > 0 && (
+            <Badge variant="secondary" className="font-normal">
+              {lead.sqft.toLocaleString()} sqft
+            </Badge>
+          )}
+          {lead.status && !['new', 'contacted', 'qualified'].includes(lead.status) && (
+            <Badge variant="outline" className="font-normal text-[10px]">
+              {lead.status}
+            </Badge>
+          )}
+          {lead.handoffStatus === 'pending' && (
+            <Badge className="bg-purple-100 text-purple-700 text-[10px] animate-pulse">
+              ⚡ Handoff
+            </Badge>
+          )}
+          {lead.lastDisposition && (
+            <Badge variant="outline" className="font-normal text-[10px]">
+              {lead.lastDisposition}
+            </Badge>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-2 pt-1">
