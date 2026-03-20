@@ -3,21 +3,10 @@ import { supabase } from '@/integrations/supabase/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Flame, Snowflake, ThermometerSun, Skull, Phone, Mail, Clock, ArrowRight, LayoutGrid, CalendarDays } from 'lucide-react';
 import { PipelineCalendar } from '@/components/pipeline/PipelineCalendar';
-
-const STAGE_COLORS: Record<string, string> = {
-  raw_lead: 'bg-slate-100 border-slate-300',
-  contacted: 'bg-blue-50 border-blue-300',
-  interested: 'bg-purple-50 border-purple-300',
-  offer_made: 'bg-yellow-50 border-yellow-300',
-  under_contract: 'bg-green-50 border-green-300',
-  assigned: 'bg-emerald-50 border-emerald-300',
-  closed_won: 'bg-green-100 border-green-400',
-  closed_lost: 'bg-red-50 border-red-300',
-  dead: 'bg-gray-100 border-gray-300',
-};
+import { PIPELINE_STAGES, type PipelineStage } from '@/types/index';
 
 const TEMP_CONFIG: Record<string, { icon: any; color: string; bg: string; border: string; label: string }> = {
   hot: { icon: Flame, color: 'text-red-600', bg: 'bg-red-50', border: 'border-l-red-500', label: '🔥 Hot' },
@@ -81,26 +70,18 @@ export function PipelinePage() {
   const [draggedLead, setDraggedLead] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'board' | 'calendar'>('board');
 
-  const { data: stages } = useQuery({
-    queryKey: ['deal-stages'],
-    queryFn: async () => {
-      const { data } = await supabase.from('deal_stages').select('id, name').order('id');
-      return data || [];
-    },
-  });
-
   const { data: leads } = useQuery({
     queryKey: ['leads-pipeline'],
     queryFn: async () => {
       const { data } = await supabase.from('leads').select(
-        'id, owner_name, owner_phone, owner_email, deal_stage_id, viability_score, status, property_data, next_followup_date, last_contact_date, outreach_count, motivation_type, callable'
+        'id, owner_name, owner_phone, owner_email, pipeline_stage, viability_score, status, property_data, next_followup_date, last_contact_date, outreach_count, motivation_type, callable, last_disposition, next_action_type, next_action_at, handoff_status'
       );
       return data || [];
     },
   });
 
   // Fetch latest communication per lead (for leads that have been contacted)
-  const contactedLeadIds = leads?.filter(l => l.deal_stage_id && l.deal_stage_id > 6).map(l => l.id) || [];
+  const contactedLeadIds = leads?.filter(l => l.outreach_count > 0).map(l => l.id) || [];
   const { data: latestComms } = useQuery({
     queryKey: ['latest-comms-pipeline', contactedLeadIds.join(',')],
     queryFn: async () => {
@@ -118,17 +99,40 @@ export function PipelinePage() {
     enabled: contactedLeadIds.length > 0,
   });
 
+  // Realtime subscription
+  useEffect(() => {
+    const channel = supabase
+      .channel('pipeline_stage_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'leads',
+          filter: 'pipeline_stage=neq.null',
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['leads-pipeline'] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [queryClient]);
+
   const moveLead = useMutation({
-    mutationFn: async ({ leadId, stageId }: { leadId: number; stageId: number }) => {
-      const { error } = await supabase.from('leads').update({ deal_stage_id: stageId }).eq('id', leadId);
+    mutationFn: async ({ leadId, newStage }: { leadId: number; newStage: PipelineStage }) => {
+      const { error } = await supabase.from('leads').update({ pipeline_stage: newStage }).eq('id', leadId);
       if (error) throw error;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['leads-pipeline'] }),
   });
 
-  const handleDrop = (stageId: number) => {
+  const handleDrop = (stageId: PipelineStage) => {
     if (draggedLead) {
-      moveLead.mutate({ leadId: draggedLead, stageId });
+      moveLead.mutate({ leadId: draggedLead, newStage: stageId });
       setDraggedLead(null);
     }
   };
@@ -177,19 +181,31 @@ export function PipelinePage() {
         {activeTab === 'calendar' && <PipelineCalendar />}
 
         {activeTab === 'board' && <div className="flex gap-3 overflow-x-auto pb-4" style={{ minHeight: '70vh' }}>
-          {stages?.map((stage) => {
-            const stageLeads = leads?.filter((l) => l.deal_stage_id === stage.id) || [];
-            const colorClass = STAGE_COLORS[stage.name] || 'bg-muted border-border';
+          {PIPELINE_STAGES.map((stage) => {
+            const stageLeads = leads?.filter((l) => l.pipeline_stage === stage.id) || [];
+            
+            const stageColorClass = {
+              'new': 'bg-slate-100 border-slate-300',
+              'attempting_contact': 'bg-blue-50 border-blue-300',
+              'follow_up_scheduled': 'bg-purple-50 border-purple-300',
+              'callback_pending': 'bg-indigo-50 border-indigo-300',
+              'needs_human_followup': 'bg-yellow-50 border-yellow-300',
+              'offer_prep': 'bg-orange-50 border-orange-300',
+              'negotiating': 'bg-amber-50 border-amber-300',
+              'under_contract': 'bg-green-50 border-green-300',
+              'closed_won': 'bg-emerald-100 border-emerald-400',
+              'closed_lost': 'bg-gray-100 border-gray-300',
+            }[stage.id] || 'bg-muted border-border';
 
             return (
               <div
                 key={stage.id}
-                className={`flex-shrink-0 w-72 rounded-lg border-2 ${colorClass} flex flex-col`}
+                className={`flex-shrink-0 w-72 rounded-lg border-2 ${stageColorClass} flex flex-col`}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={() => handleDrop(stage.id)}
               >
                 <div className="p-3 border-b font-semibold text-sm flex items-center justify-between">
-                  <span className="capitalize">{stage.name.replace(/_/g, ' ')}</span>
+                  <span>{stage.label}</span>
                   <Badge variant="secondary">{stageLeads.length}</Badge>
                 </div>
 
@@ -253,6 +269,34 @@ export function PipelinePage() {
                             )}
                           </div>
                         )}
+
+                        {/* New fields row */}
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap text-[10px]">
+                          {lead.status && (
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                              {lead.status}
+                            </Badge>
+                          )}
+                          {lead.last_disposition && (
+                            <Badge variant="outline" className={`text-[9px] px-1 py-0 h-4 ${
+                              lead.last_disposition === 'interested' ? 'bg-green-50 text-green-700 border-green-300' :
+                              lead.last_disposition === 'no_answer' ? 'bg-gray-50 text-gray-600 border-gray-300' :
+                              'bg-slate-50 text-slate-600 border-slate-300'
+                            }`}>
+                              {lead.last_disposition.replace(/_/g, ' ')}
+                            </Badge>
+                          )}
+                          {lead.next_action_type && lead.next_action_at && (
+                            <span className="text-[9px] text-gray-600">
+                              {lead.next_action_type.replace(/_/g, ' ')} · {new Date(lead.next_action_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            </span>
+                          )}
+                          {lead.handoff_status === 'pending' && (
+                            <Badge className="text-[9px] px-1 py-0 h-4 bg-purple-500 text-white animate-pulse">
+                              ⚡ Handoff Pending
+                            </Badge>
+                          )}
+                        </div>
 
                         {/* Next action */}
                         {nextAction && (

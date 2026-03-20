@@ -49,7 +49,8 @@ function needsBen(lead: any): boolean {
   const pd = parsePropertyData(lead.property_data);
   if ((lead.estimated_arv ?? 0) >= 200000) return true;
   if (pd?.escalate_to_ben) return true;
-  if ((lead.deal_stage_id ?? 0) >= 9) return true;
+  // Check pipeline_stage for advanced stages that need Ben's attention
+  if (lead.pipeline_stage === 'under_contract' || lead.pipeline_stage === 'closed_won' || lead.pipeline_stage === 'closed_lost') return true;
   if (pd?.lead_temperature === 'hot' && (lead.viability_score ?? 0) >= 80) return true;
   return false;
 }
@@ -89,7 +90,6 @@ interface CalendarLead {
   needsBen: boolean;
   onHold: boolean;
   estimated_arv: number | null;
-  deal_stage_id: number | null;
   property_data: any;
   pipeline_stage: string | null;
   next_action_type: string | null;
@@ -112,7 +112,7 @@ export function PipelineCalendar() {
       // This ensures human follow-up work shows on the calendar too
       const { data } = await supabase
         .from('leads')
-        .select('id, owner_name, owner_phone, next_followup_date, deal_stage_id, viability_score, status, property_data, outreach_count, estimated_arv, pipeline_stage, next_action_type, next_action_at, handoff_status, last_disposition, engagement_level')
+        .select('id, owner_name, owner_phone, next_followup_date, viability_score, status, property_data, outreach_count, estimated_arv, pipeline_stage, next_action_type, next_action_at, handoff_status, last_disposition, engagement_level')
         .or('next_followup_date.not.is.null,next_action_at.not.is.null')
         .not('status', 'in', '(dead,dnc,suppressed)');
       return data || [];
@@ -254,7 +254,6 @@ export function PipelineCalendar() {
           needsBen: needsBen(lead),
           onHold: isOnHold(lead),
           estimated_arv: lead.estimated_arv,
-          deal_stage_id: lead.deal_stage_id,
           property_data: lead.property_data,
           pipeline_stage: lead.pipeline_stage,
           next_action_type: lead.next_action_type,
