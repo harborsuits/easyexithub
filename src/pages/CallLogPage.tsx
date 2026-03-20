@@ -1,36 +1,25 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { AppLayout } from '@/components/common/AppLayout';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { ChevronDown, ChevronUp, PhoneCall, Clock } from 'lucide-react';
-import { FormattedSummary } from '@/utils/formatSummary';
+import { ActivityCard } from '@/components/activity/ActivityCard';
 
-const OUTCOME_COLORS: Record<string, string> = {
-  interested: 'bg-green-100 text-green-800',
-  callback: 'bg-blue-100 text-blue-800',
-  not_interested: 'bg-red-100 text-red-800',
-  no_answer: 'bg-slate-100 text-slate-700',
-  voicemail: 'bg-amber-100 text-amber-800',
-  scheduled: 'bg-indigo-100 text-indigo-800',
-};
+
 
 export default function CallLogPage() {
   const [outcomeFilter, setOutcomeFilter] = useState('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const { data: calls, isLoading } = useQuery({
     queryKey: ['call-log', outcomeFilter, dateFrom, dateTo],
     queryFn: async () => {
       let query = supabase
         .from('communications')
-        .select('id, lead_id, contact_date, contact_time, outcome, summary, duration_minutes, notes, created_at')
-        .eq('communication_type_id', 1)
+        .select('*')
         .order('created_at', { ascending: false });
 
       if (outcomeFilter !== 'all') query = query.eq('outcome', outcomeFilter);
@@ -42,31 +31,67 @@ export default function CallLogPage() {
       if (!data || data.length === 0) return [];
 
       const leadIds = [...new Set(data.map(c => c.lead_id).filter(Boolean))];
-      const { data: leads } = await supabase.from('leads').select('id, owner_name, property_data, owner_address').in('id', leadIds);
+      
+      // Fetch lead details
+      const { data: leads } = await supabase
+        .from('leads')
+        .select('id, owner_name, property_data, owner_address, distress_signals, engagement_level, status, next_action_type, next_action_at')
+        .in('id', leadIds);
+      
       const leadMap: Record<number, any> = {};
       leads?.forEach(l => { leadMap[l.id] = l; });
+
+      // Fetch call history for each lead
+      const { data: allComms } = await supabase
+        .from('communications')
+        .select('lead_id, contact_date, contact_time, outcome, direction')
+        .in('lead_id', leadIds)
+        .order('created_at', { ascending: true });
+      
+      const callHistoryMap: Record<number, any[]> = {};
+      allComms?.forEach(comm => {
+        if (!callHistoryMap[comm.lead_id]) callHistoryMap[comm.lead_id] = [];
+        callHistoryMap[comm.lead_id].push({
+          date: comm.contact_date || '—',
+          time: comm.contact_time?.slice(0, 5),
+          outcome: comm.outcome || 'unknown',
+          direction: comm.direction || 'outbound',
+        });
+      });
 
       return data.map(c => {
         const lead = leadMap[c.lead_id];
         const name = lead?.owner_name || `Lead #${c.lead_id}`;
         let pd: any = {};
         try { pd = typeof lead?.property_data === 'string' ? JSON.parse(lead.property_data) : (lead?.property_data || {}); } catch {}
-        const addr = pd.address || lead?.owner_address || '';
-        const arv = pd.arv || pd.estimated_value || '';
-        return { ...c, lead_name: name, property_address: addr, arv };
+        const addr = pd.property_address || pd.address || lead?.owner_address || '';
+        
+        // Determine next action
+        let nextAction = null;
+        if (lead?.status === 'dnc') {
+          nextAction = { type: 'dnc', label: 'Lead Closed — Do Not Contact' };
+        } else if (lead?.next_action_type === 'callback') {
+          const actionDate = lead.next_action_at ? new Date(lead.next_action_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+          nextAction = { type: 'callback', label: 'Callback scheduled', date: actionDate };
+        } else if (lead?.next_action_type === 'follow_up') {
+          const actionDate = lead.next_action_at ? new Date(lead.next_action_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+          nextAction = { type: 'follow_up', label: 'Follow-up needed', date: actionDate };
+        }
+        
+        return {
+          ...c,
+          lead_name: name,
+          property_address: addr,
+          distressSignals: lead?.distress_signals || [],
+          leadTemperature: lead?.engagement_level || 'cold',
+          callHistory: callHistoryMap[c.lead_id] || [],
+          nextAction,
+        };
       });
     },
   });
 
-  const outcomes = ['interested', 'callback', 'not_interested', 'no_answer', 'voicemail', 'scheduled'];
-
-  const parseNotes = (notes: any) => {
-    if (!notes) return null;
-    if (typeof notes === 'string') {
-      try { return JSON.parse(notes); } catch { return { text: notes }; }
-    }
-    return notes;
-  };
+  const outcomes = ['interested', 'callback', 'not_interested', 'no_answer', 'voicemail', 'dnc', 'scheduled'];
 
   return (
     <AppLayout>
@@ -103,78 +128,28 @@ export default function CallLogPage() {
         </Card>
 
         {/* Call List */}
-        <Card>
-          <CardContent className="p-0">
-            {isLoading ? (
-              <div className="p-8 text-center text-muted-foreground">Loading calls...</div>
-            ) : !calls || calls.length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground">No calls found</div>
-            ) : (
-              <div className="divide-y">
-                {calls.map((call: any) => {
-                  const notes = parseNotes(call.notes);
-                  const hasTranscript = notes?.transcript;
-                  const cost = notes?.cost;
-                  const isExpanded = expandedId === call.id;
-
-                  return (
-                    <div key={call.id} className="p-4">
-                      <div className="flex items-start gap-3">
-                        <PhoneCall className="h-5 w-5 text-blue-500 mt-0.5 flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <Link to={`/leads/${call.lead_id}`} className="font-medium text-blue-600 hover:underline">
-                              {call.lead_name}
-                            </Link>
-                            {call.outcome && (
-                              <span className={`inline-flex px-2 py-0.5 rounded text-[11px] font-medium ${OUTCOME_COLORS[call.outcome] || 'bg-gray-100 text-gray-700'}`}>
-                                {call.outcome.replace(/_/g, ' ')}
-                              </span>
-                            )}
-                            {call.duration_minutes != null && (
-                              <span className="text-xs text-muted-foreground flex items-center gap-0.5"><Clock className="h-3 w-3" /> {call.duration_minutes}m</span>
-                            )}
-                            {cost != null && (
-                              <span className="text-xs text-muted-foreground">${Number(cost).toFixed(2)}</span>
-                            )}
-                          </div>
-                          {(call.property_address || call.arv) && (
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              {call.property_address && <><span className="font-semibold text-foreground">Property:</span> {call.property_address}</>}
-                              {call.property_address && call.arv && <span className="mx-1 text-muted-foreground/50">|</span>}
-                              {call.arv && <><span className="font-semibold text-foreground">ARV:</span> ${Number(call.arv).toLocaleString()}</>}
-                            </p>
-                          )}
-                          <div className="mt-1"><FormattedSummary text={call.summary || ''} /></div>
-                          {hasTranscript && (
-                            <>
-                              <button
-                                onClick={() => setExpandedId(isExpanded ? null : call.id)}
-                                className="flex items-center gap-1 text-xs text-blue-600 hover:underline mt-2"
-                              >
-                                {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                                {isExpanded ? 'Hide transcript' : 'Show transcript'}
-                              </button>
-                              {isExpanded && (
-                                <div className="mt-2 bg-muted rounded p-3 text-xs max-h-64 overflow-auto whitespace-pre-wrap">
-                                  {typeof notes.transcript === 'string' ? notes.transcript : JSON.stringify(notes.transcript, null, 2)}
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap text-right">
-                          {call.contact_date || '—'}
-                          {call.contact_time && <><br />{call.contact_time.slice(0, 5)}</>}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {isLoading ? (
+          <Card>
+            <CardContent className="p-8 text-center text-muted-foreground">Loading calls...</CardContent>
+          </Card>
+        ) : !calls || calls.length === 0 ? (
+          <Card>
+            <CardContent className="p-8 text-center text-muted-foreground">No calls found</CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {calls.map((call: any) => (
+              <ActivityCard
+                key={call.id}
+                call={call}
+                distressSignals={call.distressSignals}
+                callHistory={call.callHistory}
+                leadTemperature={call.leadTemperature}
+                nextAction={call.nextAction}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </AppLayout>
   );
