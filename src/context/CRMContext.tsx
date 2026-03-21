@@ -80,7 +80,7 @@ export function CRMProvider({ children }: { children: React.ReactNode }) {
     try {
       const { error } = await supabase
         .from('leads')
-        .update({ pipeline_stage: newStage, updated_at: new Date().toISOString() })
+        .update({ pipeline_stage: newStage, updated_at: new Date().toISOString(), pipeline_update_source: 'operator', state_change_reason: `Operator moved to ${newStage}`, last_state_change_at: new Date().toISOString() })
         .eq('id', Number(leadId));
       if (error) {
         console.error('Error updating pipeline_stage:', error);

@@ -117,6 +117,15 @@ async function canDial(lead: any, ee: any): Promise<GateResult> {
     return { allowed: false, reason: "not_test_approved" };
   }
 
+  // Gate 0.5: DATA HYGIENE — only clean_new or reconciled leads may auto-dial
+  // dirty_legacy and hold_review are blocked even if manual_test_approved is true.
+  // manual_test_approved is NOT a bypass for hygiene gating.
+  const hygieneStatus = lead.data_hygiene_status || 'dirty_legacy';
+  if (!['clean_new', 'reconciled'].includes(hygieneStatus)) {
+    console.log(`[GATE BLOCK] Lead ${lead.id} data_hygiene_status=${hygieneStatus} (requires clean_new or reconciled)`);
+    return { allowed: false, reason: `hygiene_gate_blocked (${hygieneStatus})` };
+  }
+
   // Gate 1: Must be callable
   if (!lead.callable) {
     console.log(`[GATE BLOCK] Lead ${lead.id} callable=false`);

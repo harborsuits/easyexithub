@@ -74,7 +74,7 @@ export function PipelinePage() {
     queryKey: ['leads-pipeline'],
     queryFn: async () => {
       const { data } = await supabase.from('leads').select(
-        'id, owner_name, owner_phone, owner_email, pipeline_stage, viability_score, status, property_data, next_followup_date, last_contact_date, outreach_count, motivation_type, callable, last_disposition, next_action_type, next_action_at, handoff_status'
+        'id, owner_name, owner_phone, owner_email, pipeline_stage, viability_score, status, property_data, next_followup_date, last_contact_date, outreach_count, motivation_type, callable, last_disposition, next_action_type, next_action_at, handoff_status, data_hygiene_status, sensitive_flag, exhaustion_status, callback_status'
       );
       return data || [];
     },
@@ -225,7 +225,13 @@ export function PipelinePage() {
                         key={lead.id}
                         draggable
                         onDragStart={() => setDraggedLead(lead.id)}
-                        className={`bg-white rounded-md border p-3 cursor-grab active:cursor-grabbing shadow-sm hover:shadow-md transition ${tempCfg ? `border-l-4 ${tempCfg.border}` : ''}`}
+                        className={`rounded-md border p-3 cursor-grab active:cursor-grabbing shadow-sm hover:shadow-md transition ${
+                          lead.sensitive_flag ? 'bg-red-50 border-2 border-red-500 ring-1 ring-red-300' :
+                          lead.data_hygiene_status === 'dirty_legacy' ? 'bg-red-50 border-2 border-red-600' :
+                          lead.data_hygiene_status === 'hold_review' ? 'bg-yellow-50 border-2 border-yellow-500' :
+                          lead.exhaustion_status === 'exhausted' ? 'bg-gray-100 border-2 border-gray-400' :
+                          `bg-white ${tempCfg ? `border-l-4 ${tempCfg.border}` : ''}`
+                        }`}
                       >
                         {/* Header: Name + Temperature */}
                         <div className="flex items-start justify-between gap-2">
@@ -294,6 +300,34 @@ export function PipelinePage() {
                           {lead.handoff_status === 'pending' && (
                             <Badge className="text-[9px] px-1 py-0 h-4 bg-purple-500 text-white animate-pulse">
                               ⚡ Handoff Pending
+                            </Badge>
+                          )}
+                          {lead.data_hygiene_status === 'hold_review' && (
+                            <Badge className="text-[9px] px-1 py-0 h-4 bg-yellow-500 text-black font-bold">⚠️ HOLD</Badge>
+                          )}
+                          {lead.data_hygiene_status === 'dirty_legacy' && (
+                            <Badge className="text-[9px] px-1 py-0 h-4 bg-red-700 text-white font-bold">🚨 DIRTY</Badge>
+                          )}
+                          {lead.data_hygiene_status === 'unverified' && (
+                            <Badge className="text-[9px] px-1 py-0 h-4 bg-orange-500 text-white font-bold">❓ UNVERIFIED</Badge>
+                          )}
+                          {lead.sensitive_flag && (
+                            <Badge className="text-[9px] px-1 py-0 h-4 bg-red-600 text-white font-bold animate-pulse">🔒 SENSITIVE</Badge>
+                          )}
+                          {lead.exhaustion_status === 'exhausted' && (
+                            <Badge className="text-[9px] px-1 py-0 h-4 bg-gray-700 text-white font-bold">💤 EXHAUSTED</Badge>
+                          )}
+                          {lead.exhaustion_status === 'cooling' && (
+                            <Badge className="text-[9px] px-1 py-0 h-4 bg-blue-700 text-white font-bold">🧊 COOLING</Badge>
+                          )}
+                          {lead.callback_status && lead.callback_status !== 'none' && (
+                            <Badge className={`text-[9px] px-1 py-0 h-4 font-bold ${
+                              lead.callback_status === 'requested' ? 'bg-indigo-600 text-white' :
+                              lead.callback_status === 'scheduled' ? 'bg-blue-500 text-white' :
+                              lead.callback_status === 'attempted' ? 'bg-amber-600 text-white' :
+                              'bg-green-600 text-white'
+                            }`}>
+                              📞 {lead.callback_status}
                             </Badge>
                           )}
                         </div>

@@ -91,7 +91,7 @@ export function LeadsProvider({ children }: { children: React.ReactNode }) {
     try {
       const { error: err } = await supabase
         .from('leads')
-        .update({ ...updates, updated_at: new Date().toISOString() })
+        .update({ ...updates, updated_at: new Date().toISOString(), status_update_source: 'operator', pipeline_update_source: 'operator', state_change_reason: 'Operator manual update', last_state_change_at: new Date().toISOString() })
         .eq('id', id);
       
       if (err) throw err;

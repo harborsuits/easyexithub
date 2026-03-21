@@ -45,9 +45,10 @@ serve(async (req) => {
     const ee = createClient(EE_URL, EE_KEY);
     const callWindowOpen = isInCallWindow();
 
-    const [promoted, marked] = await Promise.all([
+    const [promoted, marked, callbackResults] = await Promise.all([
       buildAndDialQueue(ee, callWindowOpen),
       markMissedFollowUps(ee),
+      processCallbackLifecycle(ee),
     ]);
 
     return json({
@@ -59,6 +60,7 @@ serve(async (req) => {
       dial_results: promoted.dialResults,
       marked_missed: marked.count,
       marked_leads: marked.leads,
+      callback_lifecycle: callbackResults,
     });
   } catch (error) {
     console.error("[ee-engine] Error:", error);
@@ -122,6 +124,24 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
   }
 
   // ---------------------------------------------------------------
+  // HYGIENE GATE: Only clean_new or reconciled leads can auto-dial.
+  // dirty_legacy and hold_review are blocked even if manual_test_approved.
+  // This is NOT bypassed by manual_test_approved.
+  // ---------------------------------------------------------------
+  const { data: hygieneCleanLeads, error: hygieneErr } = await ee
+    .from("leads")
+    .select("id")
+    .in("data_hygiene_status", ["clean_new", "reconciled"]);
+
+  if (hygieneErr) {
+    console.error("[ee-engine] Hygiene gate query error:", hygieneErr);
+    return { breakdown: { callbacks: 0, fresh: 0, retries: 0, total: 0 }, dialedCount: 0, dialResults: [] };
+  }
+
+  const hygienePassIds = new Set((hygieneCleanLeads || []).map((l: any) => l.id));
+  console.log(`[ee-engine] Hygiene gate: ${hygienePassIds.size} leads with clean_new or reconciled status`);
+
+  // ---------------------------------------------------------------
   // TIER 1: Due callbacks (follow_ups with kind=callback, due now)
   // ---------------------------------------------------------------
   const { data: callbacks, error: cbErr } = await ee
@@ -140,6 +160,11 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
     for (const cb of callbacks) {
       // Scope guard: skip unapproved leads
       if (!approvedIds.has(cb.lead_id)) continue;
+      // Hygiene gate: skip dirty_legacy/hold_review leads
+      if (!hygienePassIds.has(cb.lead_id)) {
+        console.log(`[ee-engine] 🧹 Callback lead ${cb.lead_id} blocked by hygiene gate`);
+        continue;
+      }
       queue.push({
         type: "callback",
         lead_id: cb.lead_id,
@@ -171,6 +196,7 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
     .eq("callable", true)
     .eq("outbound_approved", true)
     .eq("manual_test_approved", true)  // SCOPE GUARD — temporary
+    .in("data_hygiene_status", ["clean_new", "reconciled"])  // HYGIENE GATE
     .or("outreach_count.is.null,outreach_count.eq.0")
     .not("engagement_level", "in", "(dead,dnc)")
     .not("owner_phone", "is", null)
@@ -231,6 +257,11 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
       for (const r of retries) {
         // Scope guard: skip unapproved leads
         if (!approvedIds.has(r.lead_id)) continue;
+        // Hygiene gate: skip dirty_legacy/hold_review leads
+        if (!hygienePassIds.has(r.lead_id)) {
+          console.log(`[ee-engine] 🧹 Retry lead ${r.lead_id} blocked by hygiene gate`);
+          continue;
+        }
         queue.push({
           type: "retry",
           lead_id: r.lead_id,
@@ -519,6 +550,217 @@ async function markMissedFollowUps(ee: any) {
   }
 
   return { count: marked.length, leads: marked };
+}
+
+// =====================================================================
+// PHASE 4B.4/4B.5/4B.6: CALLBACK LIFECYCLE MANAGEMENT
+//
+// Finds leads with callback_status='pending' whose callback_due_at
+// has passed without a successful connection. Transitions them through:
+//   pending → missed_once (1st miss, reschedule)
+//   missed_once → missed_multiple (2nd miss, downgrade out of callback_pending)
+//
+// Also handles:
+//   - Canceling stale callback follow_ups when superseded
+//   - Never duplicating callback follow_ups for the same lead
+// =====================================================================
+
+async function processCallbackLifecycle(ee: any) {
+  const now = new Date();
+  const nowISO = now.toISOString();
+  // Grace period: callback_due_at + 2 hours before we consider it missed
+  const gracePeriod = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString();
+
+  const results: any[] = [];
+
+  // Find leads with overdue callbacks (pending or missed_once)
+  const { data: overdueLeads, error: queryErr } = await ee
+    .from("leads")
+    .select("id, owner_name, callback_status, callback_attempts, callback_due_at, callback_last_attempt_at, pipeline_stage, next_action_type")
+    .in("callback_status", ["pending", "missed_once"])
+    .lt("callback_due_at", gracePeriod)
+    .order("callback_due_at", { ascending: true })
+    .limit(50);
+
+  if (queryErr) {
+    console.error("[ee-engine] Callback lifecycle query error:", queryErr);
+    return { processed: 0, results: [] };
+  }
+
+  if (!overdueLeads || overdueLeads.length === 0) {
+    console.log("[ee-engine] ✓ No overdue callbacks");
+    return { processed: 0, results: [] };
+  }
+
+  console.log(`[ee-engine] Found ${overdueLeads.length} overdue callback leads`);
+
+  for (const lead of overdueLeads) {
+    try {
+      // Check if a call was actually attempted since callback_due_at
+      // (the webhook may have already incremented callback_attempts)
+      const { data: recentComms } = await ee
+        .from("communications")
+        .select("id, disposition, created_at")
+        .eq("lead_id", lead.id)
+        .gte("created_at", lead.callback_due_at)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      const callAttempted = recentComms && recentComms.length > 0;
+      const lastDisposition = callAttempted ? recentComms[0].disposition : null;
+
+      // If a call was attempted and resulted in connection (not no_answer/voicemail),
+      // the webhook should have already handled it. Skip.
+      if (callAttempted && lastDisposition && !["no_answer", "voicemail"].includes(lastDisposition)) {
+        console.log(`[ee-engine] Callback lead ${lead.id} already resolved by webhook (${lastDisposition}). Skipping.`);
+        continue;
+      }
+
+      if (lead.callback_status === "pending") {
+        // TASK 4B.4: First miss
+        const newAttempts = (lead.callback_attempts || 0) + (callAttempted ? 0 : 0); // webhook already incremented if call happened
+        const rescheduleDate = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000); // Reschedule 2 days out
+
+        // Snap to call window
+        const snappedDate = snapToCallWindowEngine(rescheduleDate);
+
+        const leadUpdate: Record<string, any> = {
+          callback_status: "missed_once",
+          callback_last_attempt_at: nowISO,
+          callback_due_at: snappedDate.toISOString(),
+          next_action_at: snappedDate.toISOString(),
+          updated_at: nowISO,
+        };
+
+        const { error: updateErr } = await ee
+          .from("leads")
+          .update(leadUpdate)
+          .eq("id", lead.id);
+
+        if (updateErr) {
+          console.error(`[ee-engine] Callback missed_once update error (lead ${lead.id}):`, updateErr);
+          continue;
+        }
+
+        // Cancel any existing callback follow_ups for this lead, create new one
+        await ee
+          .from("follow_ups")
+          .update({ status: "canceled", canceled_at: nowISO, notes: "Callback missed — rescheduling" })
+          .eq("lead_id", lead.id)
+          .eq("kind", "callback")
+          .in("status", ["pending", "scheduled"]);
+
+        // Create rescheduled callback follow_up
+        await ee.from("follow_ups").insert({
+          lead_id: lead.id,
+          kind: "callback",
+          source: "engine_callback_reschedule",
+          status: "pending",
+          priority: 85,
+          reason: `Callback missed once — rescheduled to ${snappedDate.toISOString()}`,
+          scheduled_for: snappedDate.toISOString(),
+        });
+
+        results.push({
+          lead_id: lead.id,
+          owner_name: lead.owner_name,
+          action: "missed_once",
+          rescheduled_to: snappedDate.toISOString(),
+        });
+        console.log(`[ee-engine] 📞 Callback missed_once: lead ${lead.id} (${lead.owner_name}) → rescheduled to ${snappedDate.toISOString()}`);
+
+      } else if (lead.callback_status === "missed_once") {
+        // TASK 4B.5: Second miss — downgrade out of callback_pending
+        const leadUpdate: Record<string, any> = {
+          callback_status: "missed_multiple",
+          callback_resolution: "downgraded",
+          callback_resolution_at: nowISO,
+          callback_last_attempt_at: nowISO,
+          callback_due_at: null,
+          pipeline_stage: "needs_human_followup",
+          next_action_type: "human_followup",
+          next_action_at: nowISO,
+          handoff_status: "pending",
+          sla_due_at: new Date(now.getTime() + 4 * 60 * 60 * 1000).toISOString(),
+          updated_at: nowISO,
+        };
+
+        const { error: updateErr } = await ee
+          .from("leads")
+          .update(leadUpdate)
+          .eq("id", lead.id);
+
+        if (updateErr) {
+          console.error(`[ee-engine] Callback missed_multiple update error (lead ${lead.id}):`, updateErr);
+          continue;
+        }
+
+        // Cancel all callback follow_ups
+        await ee
+          .from("follow_ups")
+          .update({ status: "canceled", canceled_at: nowISO, notes: "Callback missed twice — downgraded to human_followup" })
+          .eq("lead_id", lead.id)
+          .eq("kind", "callback")
+          .in("status", ["pending", "scheduled"]);
+
+        results.push({
+          lead_id: lead.id,
+          owner_name: lead.owner_name,
+          action: "missed_multiple_downgraded",
+          new_pipeline_stage: "needs_human_followup",
+        });
+        console.log(`[ee-engine] 📞 Callback missed_multiple: lead ${lead.id} (${lead.owner_name}) → downgraded to needs_human_followup`);
+      }
+    } catch (e) {
+      console.error(`[ee-engine] Callback lifecycle exception (lead ${lead.id}):`, e);
+    }
+  }
+
+  return { processed: results.length, results };
+}
+
+// Call window snapping for engine (mirrors webhook logic)
+function snapToCallWindowEngine(targetDate: Date): Date {
+  const etHour = getETHourEngine(targetDate);
+  const etMin = targetDate.getUTCMinutes();
+  const timeDecimal = etHour + etMin / 60;
+
+  if (timeDecimal >= 10.5 && timeDecimal < 12) return targetDate;
+  if (timeDecimal >= 16.5 && timeDecimal < 18.5) return targetDate;
+  if (timeDecimal < 10.5) return setETTimeEngine(targetDate, 10, 30);
+  if (timeDecimal >= 12 && timeDecimal < 16.5) return setETTimeEngine(targetDate, 16, 30);
+  const nextDay = new Date(targetDate.getTime() + 24 * 60 * 60 * 1000);
+  return setETTimeEngine(nextDay, 10, 30);
+}
+
+function getETOffsetEngine(date: Date): number {
+  const year = date.getUTCFullYear();
+  const marchSecondSun = nthSundayEngine(year, 2, 2);
+  const novFirstSun = nthSundayEngine(year, 10, 1);
+  if (date.getTime() >= marchSecondSun.getTime() && date.getTime() < novFirstSun.getTime()) return -4;
+  return -5;
+}
+
+function nthSundayEngine(year: number, month: number, n: number): Date {
+  const d = new Date(Date.UTC(year, month, 1, 7, 0, 0));
+  let count = 0;
+  while (count < n) {
+    if (d.getUTCDay() === 0) count++;
+    if (count < n) d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return d;
+}
+
+function getETHourEngine(date: Date): number {
+  return (date.getUTCHours() + getETOffsetEngine(date) + 24) % 24;
+}
+
+function setETTimeEngine(date: Date, etHour: number, etMin: number): Date {
+  const offset = getETOffsetEngine(date);
+  const utcHour = etHour - offset;
+  const result = new Date(date);
+  result.setUTCHours(utcHour, etMin, 0, 0);
+  return result;
 }
 
 function json(data: any, status = 200): Response {

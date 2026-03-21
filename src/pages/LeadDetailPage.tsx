@@ -205,6 +205,10 @@ export default function LeadDetailPage() {
           </div>
           {lead.dnc_listed && <Badge variant="destructive">DNC</Badge>}
           {lead.opt_out && <Badge variant="outline" className="border-red-300 text-red-600">Opted Out</Badge>}
+          {lead.data_hygiene_status === 'dirty_legacy' && <Badge className="bg-red-700 text-white">🚨 DIRTY LEGACY</Badge>}
+          {lead.data_hygiene_status === 'hold_review' && <Badge className="bg-yellow-500 text-black">⚠️ HOLD — Review</Badge>}
+          {lead.sensitive_flag && <Badge className="bg-red-600 text-white animate-pulse">🔒 SENSITIVE</Badge>}
+          {lead.exhaustion_status === 'exhausted' && <Badge className="bg-gray-700 text-white">💤 EXHAUSTED</Badge>}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -454,6 +458,99 @@ export default function LeadDetailPage() {
                       {lead.next_followup_date ? new Date(lead.next_followup_date).toLocaleDateString() : 'Not set'}
                     </span>
                     <Button size="sm" variant="ghost" onClick={() => { setFollowupDate(lead.next_followup_date || ''); setEditFollowup(true); }}>Edit</Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Trust Gate / System Status */}
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-sm">🛡️ Trust Gate</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                {/* Data Hygiene */}
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Data Hygiene</span>
+                  <Badge className={`text-xs font-bold ${
+                    lead.data_hygiene_status === 'clean' || lead.data_hygiene_status === 'reconciled' ? 'bg-green-100 text-green-800 border-green-300' :
+                    lead.data_hygiene_status === 'dirty_legacy' ? 'bg-red-100 text-red-800 border-red-300' :
+                    lead.data_hygiene_status === 'hold_review' ? 'bg-yellow-100 text-yellow-800 border-yellow-300' :
+                    lead.data_hygiene_status === 'unverified' ? 'bg-orange-100 text-orange-800 border-orange-300' :
+                    'bg-gray-100 text-gray-700'
+                  }`}>
+                    {lead.data_hygiene_status || 'unknown'}
+                  </Badge>
+                </div>
+
+                {/* Sensitive Flag */}
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Sensitive</span>
+                  {lead.sensitive_flag ? (
+                    <Badge className="bg-red-600 text-white text-xs font-bold animate-pulse">🔒 YES</Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-xs text-green-700 border-green-300">No</Badge>
+                  )}
+                </div>
+
+                {/* Exhaustion Status */}
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Exhaustion</span>
+                  <Badge className={`text-xs font-bold ${
+                    lead.exhaustion_status === 'active' ? 'bg-green-100 text-green-800' :
+                    lead.exhaustion_status === 'cooling' ? 'bg-blue-100 text-blue-800' :
+                    lead.exhaustion_status === 'exhausted' ? 'bg-gray-200 text-gray-800' :
+                    'bg-gray-100 text-gray-600'
+                  }`}>
+                    {lead.exhaustion_status || 'unknown'}
+                  </Badge>
+                </div>
+
+                {/* Callback Status */}
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Callback</span>
+                  <Badge className={`text-xs font-bold ${
+                    lead.callback_status === 'requested' ? 'bg-indigo-100 text-indigo-800' :
+                    lead.callback_status === 'scheduled' ? 'bg-blue-100 text-blue-800' :
+                    lead.callback_status === 'attempted' ? 'bg-amber-100 text-amber-800' :
+                    lead.callback_status === 'completed' ? 'bg-green-100 text-green-800' :
+                    'bg-gray-100 text-gray-600'
+                  }`}>
+                    {lead.callback_status || 'none'}
+                  </Badge>
+                </div>
+
+                {/* Provenance / Source */}
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Source</span>
+                  <span className="text-sm font-medium">{lead.lead_source || '—'}</span>
+                </div>
+
+                {/* Last State Change */}
+                {lead.last_state_change_at && (
+                  <div className="border-t pt-2 mt-2 space-y-1">
+                    <div className="text-xs text-muted-foreground">
+                      Last changed: {new Date(lead.last_state_change_at).toLocaleString()}
+                    </div>
+                    {lead.state_change_reason && (
+                      <div className="text-xs text-muted-foreground">
+                        Reason: {lead.state_change_reason}
+                      </div>
+                    )}
+                    {lead.status_update_source && (
+                      <div className="text-xs text-muted-foreground">
+                        By: {lead.status_update_source}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Warning banner for blocked states */}
+                {(lead.data_hygiene_status === 'dirty_legacy' || lead.data_hygiene_status === 'hold_review' || lead.sensitive_flag || lead.exhaustion_status === 'exhausted') && (
+                  <div className="mt-2 p-2 rounded bg-red-50 border border-red-200 text-xs text-red-800 font-medium">
+                    ⚠️ This lead is currently blocked from auto-dial.
+                    {lead.data_hygiene_status === 'dirty_legacy' && ' Dirty legacy data needs reconciliation.'}
+                    {lead.data_hygiene_status === 'hold_review' && ' Manual review required before outreach.'}
+                    {lead.sensitive_flag && ' Sensitive flag is set — legal/compliance check needed.'}
+                    {lead.exhaustion_status === 'exhausted' && ' All outreach attempts exhausted.'}
                   </div>
                 )}
               </CardContent>

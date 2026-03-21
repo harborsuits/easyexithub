@@ -53,6 +53,10 @@ type FollowUpRow = {
   last_comm_at: string | null;
   bucket: TabBucket;
   queue_reason: string;
+  data_hygiene_status: string | null;
+  sensitive_flag: boolean;
+  exhaustion_status: string | null;
+  callback_status: string | null;
 };
 
 const TZ = 'America/New_York';
@@ -81,6 +85,15 @@ function deriveQueueReason(followUp: any, lead: any): string {
 
 function classifyBucket(followUp: any, lead: any, now: Date): TabBucket {
   // Blocked first
+  if (lead?.data_hygiene_status === 'hold_review' || lead?.data_hygiene_status === 'dirty_legacy') {
+    return 'blocked';
+  }
+  if (lead?.sensitive_flag === true) {
+    return 'blocked';
+  }
+  if (lead?.exhaustion_status === 'exhausted') {
+    return 'blocked';
+  }
   if (!lead?.callable || !lead?.outbound_approved ||
       lead?.engagement_level === 'dead' || lead?.engagement_level === 'dnc' ||
       lead?.status === 'dead' || lead?.status === 'dnc' || lead?.status === 'suppressed') {
@@ -141,7 +154,13 @@ function QueueCard({
 
   return (
     <>
-      <Card className={`border-2 ${engConfig?.bgClass || 'bg-white border-gray-200'}`}>
+      <Card className={`border-2 ${
+        row.sensitive_flag ? 'bg-red-50 border-red-500 ring-2 ring-red-300' :
+        row.data_hygiene_status === 'dirty_legacy' ? 'bg-red-50 border-red-600' :
+        row.data_hygiene_status === 'hold_review' ? 'bg-yellow-50 border-yellow-500' :
+        row.exhaustion_status === 'exhausted' ? 'bg-gray-100 border-gray-500' :
+        engConfig?.bgClass || 'bg-white border-gray-200'
+      }`}>
         <CardContent className="p-4">
           <div className="flex items-start justify-between gap-4">
             {/* Left: Owner + Property + Phone */}
@@ -187,6 +206,35 @@ function QueueCard({
                     <Badge key={idx} variant="destructive" className="text-[10px]">{signal}</Badge>
                   ))}
                 </div>
+              )}
+              {/* Trust Gate / Blocking Badges */}
+              {row.data_hygiene_status === 'hold_review' && (
+                <Badge className="bg-yellow-500 text-black text-xs font-bold animate-pulse">⚠️ HOLD — Review Required</Badge>
+              )}
+              {row.data_hygiene_status === 'dirty_legacy' && (
+                <Badge className="bg-red-700 text-white text-xs font-bold">🚨 DIRTY LEGACY</Badge>
+              )}
+              {row.data_hygiene_status === 'unverified' && (
+                <Badge className="bg-orange-500 text-white text-xs font-bold">❓ Unverified</Badge>
+              )}
+              {row.sensitive_flag && (
+                <Badge className="bg-red-600 text-white text-xs font-bold animate-pulse">🔒 SENSITIVE</Badge>
+              )}
+              {row.exhaustion_status === 'exhausted' && (
+                <Badge className="bg-gray-700 text-white text-xs font-bold">💤 EXHAUSTED</Badge>
+              )}
+              {row.exhaustion_status === 'cooling' && (
+                <Badge className="bg-blue-700 text-white text-xs font-bold">🧊 COOLING</Badge>
+              )}
+              {row.callback_status && row.callback_status !== 'none' && (
+                <Badge className={`text-xs font-bold ${
+                  row.callback_status === 'requested' ? 'bg-indigo-600 text-white' :
+                  row.callback_status === 'scheduled' ? 'bg-blue-500 text-white' :
+                  row.callback_status === 'attempted' ? 'bg-amber-600 text-white' :
+                  row.callback_status === 'completed' ? 'bg-green-600 text-white' : 'bg-gray-500 text-white'
+                }`}>
+                  📞 Callback: {row.callback_status}
+                </Badge>
               )}
               {row.pipeline_stage === 'needs_human_followup' && (
                 <Badge className="bg-orange-500 text-white text-xs">👤 Human Follow-Up</Badge>
@@ -288,6 +336,9 @@ function QueueCard({
                   <div><strong>Engagement level:</strong> {row.engagement_level || 'N/A'}</div>
                   <div><strong>Priority:</strong> {row.priority}</div>
                   {row.source && <div><strong>Follow-up source:</strong> {row.source}</div>}
+                  <div className="border-t pt-1 mt-1">
+                    <strong>Data hygiene:</strong> {row.data_hygiene_status || 'N/A'} · <strong>Sensitive:</strong> {row.sensitive_flag ? '🔒 Yes' : '✅ No'} · <strong>Exhaustion:</strong> {row.exhaustion_status || 'N/A'} · <strong>Callback:</strong> {row.callback_status || 'none'}
+                  </div>
                 </CollapsibleContent>
               </Collapsible>
             </div>
@@ -353,7 +404,7 @@ export default function DialQueuePage() {
 
       const { data: leads, error: leadsError } = await supabase
         .from('leads')
-        .select('id, owner_name, owner_phone, property_data, engagement_level, cold_attempts, callable, outbound_approved, status, pipeline_stage, last_disposition, lead_source, next_action_type, motivation_type, outreach_count, dnc_listed')
+        .select('id, owner_name, owner_phone, property_data, engagement_level, cold_attempts, callable, outbound_approved, status, pipeline_stage, last_disposition, lead_source, next_action_type, motivation_type, outreach_count, dnc_listed, data_hygiene_status, sensitive_flag, exhaustion_status, callback_status')
         .in('id', leadIds);
       if (leadsError) throw leadsError;
 
@@ -402,6 +453,10 @@ export default function DialQueuePage() {
           last_comm_at: latestCommMap[fu.lead_id] || null,
           bucket: classifyBucket(fu, lead, now),
           queue_reason: deriveQueueReason(fu, lead),
+          data_hygiene_status: lead.data_hygiene_status || null,
+          sensitive_flag: lead.sensitive_flag ?? false,
+          exhaustion_status: lead.exhaustion_status || null,
+          callback_status: lead.callback_status || null,
         };
       });
 
@@ -441,7 +496,7 @@ export default function DialQueuePage() {
 
   const skipOnceMutation = useMutation({
     mutationFn: async (followUpId: number) => {
-      const { error } = await supabase.from('follow_ups').update({ status: 'skipped' }).eq('id', followUpId);
+      const { error } = await supabase.from('follow_ups').update({ status: 'skipped', status_update_source: 'operator', state_change_reason: 'Operator skipped follow-up from dial queue' }).eq('id', followUpId);
       if (error) throw error;
     },
     onSuccess: () => { toast({ title: 'Follow-up skipped' }); queryClient.invalidateQueries({ queryKey: ['dial-queue'] }); },
@@ -449,7 +504,7 @@ export default function DialQueuePage() {
 
   const suppressDNCMutation = useMutation({
     mutationFn: async (leadId: number) => {
-      const { error } = await supabase.from('leads').update({ status: 'suppressed', dnc_listed: true, engagement_level: 'dnc' }).eq('id', leadId);
+      const { error } = await supabase.from('leads').update({ status: 'suppressed', dnc_listed: true, engagement_level: 'dnc', status_update_source: 'operator', pipeline_update_source: 'operator', state_change_reason: 'Operator suppressed / marked DNC from dial queue', last_state_change_at: new Date().toISOString() }).eq('id', leadId);
       if (error) throw error;
     },
     onSuccess: () => { toast({ title: 'Lead suppressed / DNC' }); queryClient.invalidateQueries({ queryKey: ['dial-queue'] }); },
@@ -457,7 +512,7 @@ export default function DialQueuePage() {
 
   const markHumanFollowupMutation = useMutation({
     mutationFn: async (leadId: number) => {
-      const { error } = await supabase.from('leads').update({ next_action_type: 'human_followup', handoff_status: 'pending' }).eq('id', leadId);
+      const { error } = await supabase.from('leads').update({ next_action_type: 'human_followup', handoff_status: 'pending', status_update_source: 'operator', pipeline_update_source: 'operator', state_change_reason: 'Operator marked for human follow-up from dial queue', last_state_change_at: new Date().toISOString() }).eq('id', leadId);
       if (error) throw error;
     },
     onSuccess: () => { toast({ title: 'Marked for human follow-up' }); queryClient.invalidateQueries({ queryKey: ['dial-queue'] }); },
@@ -465,7 +520,7 @@ export default function DialQueuePage() {
 
   const rescheduleMutation = useMutation({
     mutationFn: async ({ followUpId, newDateTime }: { followUpId: number; newDateTime: string }) => {
-      const { error } = await supabase.from('follow_ups').update({ scheduled_for: newDateTime }).eq('id', followUpId);
+      const { error } = await supabase.from('follow_ups').update({ scheduled_for: newDateTime, status_update_source: 'operator', state_change_reason: `Operator rescheduled follow-up to ${newDateTime}` }).eq('id', followUpId);
       if (error) throw error;
     },
     onSuccess: () => {
