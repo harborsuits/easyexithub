@@ -14,6 +14,9 @@ const MIN_FRESH_RATIO = 0.4;
 // Rolling 7-day max per lead
 const ROLLING_7D_MAX = 2;
 
+// 13B: Callback cap — after this many callback-type calls without resolution, → hold_review
+const CALLBACK_MAX_ATTEMPTS = 5;
+
 // Call window: only place calls during these hours (ET)
 // 10:30-12:00 and 16:30-18:30 (optimal dialing windows)
 function isInCallWindow(): boolean {
@@ -101,6 +104,34 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
   const queue: QueueItem[] = [];
 
   // ---------------------------------------------------------------
+  // MASTER KILL SWITCH — fail-closed outbound gate
+  // If outbound_calling_enabled=false or unreadable, build queue
+  // for visibility but dispatch NOTHING to real leads.
+  // Test leads with test_mode are not dispatched by the engine
+  // (engine doesn't pass test_mode to trigger-call).
+  // ---------------------------------------------------------------
+  const { data: sysConfig, error: sysConfigErr } = await ee
+    .from("system_config")
+    .select("outbound_calling_enabled, test_mode_only")
+    .eq("id", 1)
+    .maybeSingle();
+
+  const outboundEnabled = sysConfig?.outbound_calling_enabled ?? false;
+  const testModeOnly = sysConfig?.test_mode_only ?? true;
+  const systemPaused = !outboundEnabled || testModeOnly || !!sysConfigErr || !sysConfig;
+
+  if (systemPaused) {
+    const reason = sysConfigErr ? "system_config_unreadable" :
+      !sysConfig ? "system_config_missing" :
+      !outboundEnabled ? "outbound_calling_disabled" :
+      "test_mode_only_active";
+    console.log(`[ee-engine] ⛔ MASTER KILL SWITCH ACTIVE: ${reason}. Engine will NOT dispatch any calls.`);
+    // Continue building queue for visibility/logging but skip all dialing below
+  } else {
+    console.log(`[ee-engine] ✅ Outbound calling enabled. Proceeding with dispatch.`);
+  }
+
+  // ---------------------------------------------------------------
   // SCOPE GUARD: Only process leads with manual_test_approved=true
   // Fetch approved lead IDs upfront to filter all tiers.
   // TEMPORARY — remove when moving to production.
@@ -142,6 +173,64 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
   console.log(`[ee-engine] Hygiene gate: ${hygienePassIds.size} leads with clean_new or reconciled status`);
 
   // ---------------------------------------------------------------
+  // HANDOFF SUPPRESSION: Skip leads with active handoff
+  // If handoff_status is 'pending' or 'in_progress', the lead is
+  // being worked by a human — do not auto-dial.
+  // ---------------------------------------------------------------
+  const { data: handoffLeads, error: handoffErr } = await ee
+    .from("leads")
+    .select("id")
+    .in("handoff_status", ["pending", "in_progress"]);
+
+  if (handoffErr) {
+    console.error("[ee-engine] Handoff suppression query error:", handoffErr);
+    return { breakdown: { callbacks: 0, fresh: 0, retries: 0, total: 0 }, dialedCount: 0, dialResults: [] };
+  }
+
+  const handoffSuppressedIds = new Set((handoffLeads || []).map((l: any) => l.id));
+  console.log(`[ee-engine] Handoff suppression: ${handoffSuppressedIds.size} leads in active handoff`);
+
+  // ---------------------------------------------------------------
+  // COOLDOWN SUPPRESSION (Item 13C): Fetch leads in active cooldown
+  // outreach_cooldown_until > now → skip in all tiers
+  // ---------------------------------------------------------------
+  const { data: cooldownLeads, error: cooldownErr } = await ee
+    .from("leads")
+    .select("id")
+    .gt("outreach_cooldown_until", now);
+
+  if (cooldownErr) {
+    console.error("[ee-engine] Cooldown query error:", cooldownErr);
+  }
+
+  const cooldownIds = new Set((cooldownLeads || []).map((l: any) => l.id));
+  console.log(`[ee-engine] Cooldown suppression (13C): ${cooldownIds.size} leads in active cooldown`);
+
+  // ---------------------------------------------------------------
+  // ENGAGEMENT ALIGNMENT: hot_interest handoffs → engagement_level=hot
+  // Ensures hot handoffs surface with correct priority in alerts/UI.
+  // ---------------------------------------------------------------
+  const { data: misaligned } = await ee
+    .from("leads")
+    .select("id")
+    .eq("handoff_priority", "hot_interest")
+    .neq("engagement_level", "hot");
+
+  if (misaligned && misaligned.length > 0) {
+    const misalignedIds = misaligned.map((l: any) => l.id);
+    const { error: alignErr } = await ee
+      .from("leads")
+      .update({ engagement_level: "hot", updated_at: new Date().toISOString() })
+      .in("id", misalignedIds);
+
+    if (alignErr) {
+      console.error("[ee-engine] Engagement alignment error:", alignErr);
+    } else {
+      console.log(`[ee-engine] 🔥 Aligned ${misalignedIds.length} hot_interest leads to engagement_level=hot`);
+    }
+  }
+
+  // ---------------------------------------------------------------
   // TIER 1: Due callbacks (follow_ups with kind=callback, due now)
   // ---------------------------------------------------------------
   const { data: callbacks, error: cbErr } = await ee
@@ -163,6 +252,16 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
       // Hygiene gate: skip dirty_legacy/hold_review leads
       if (!hygienePassIds.has(cb.lead_id)) {
         console.log(`[ee-engine] 🧹 Callback lead ${cb.lead_id} blocked by hygiene gate`);
+        continue;
+      }
+      // Handoff suppression: skip leads in active handoff
+      if (handoffSuppressedIds.has(cb.lead_id)) {
+        console.log(`[ee-engine] 🤝 Callback lead ${cb.lead_id} suppressed — active handoff`);
+        continue;
+      }
+      // Cooldown suppression (13C): skip leads in active cooldown
+      if (cooldownIds.has(cb.lead_id)) {
+        console.log(`[ee-engine] ❄️ Callback lead ${cb.lead_id} suppressed — active cooldown`);
         continue;
       }
       queue.push({
@@ -197,6 +296,7 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
     .eq("outbound_approved", true)
     .eq("manual_test_approved", true)  // SCOPE GUARD — temporary
     .in("data_hygiene_status", ["clean_new", "reconciled"])  // HYGIENE GATE
+    .not("handoff_status", "in", "(pending,in_progress)")  // HANDOFF SUPPRESSION
     .or("outreach_count.is.null,outreach_count.eq.0")
     .not("engagement_level", "in", "(dead,dnc)")
     .not("owner_phone", "is", null)
@@ -220,6 +320,11 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
     for (const lead of freshLeads) {
       if (hasActiveFU.has(lead.id)) continue;
       if (!lead.owner_phone || lead.owner_phone.length < 10) continue;
+      // Cooldown suppression (13C)
+      if (cooldownIds.has(lead.id)) {
+        console.log(`[ee-engine] ❄️ Fresh lead ${lead.id} suppressed — active cooldown`);
+        continue;
+      }
 
       queue.push({
         type: "fresh",
@@ -260,6 +365,16 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
         // Hygiene gate: skip dirty_legacy/hold_review leads
         if (!hygienePassIds.has(r.lead_id)) {
           console.log(`[ee-engine] 🧹 Retry lead ${r.lead_id} blocked by hygiene gate`);
+          continue;
+        }
+        // Handoff suppression: skip leads in active handoff
+        if (handoffSuppressedIds.has(r.lead_id)) {
+          console.log(`[ee-engine] 🤝 Retry lead ${r.lead_id} suppressed — active handoff`);
+          continue;
+        }
+        // Cooldown suppression (13C)
+        if (cooldownIds.has(r.lead_id)) {
+          console.log(`[ee-engine] ❄️ Retry lead ${r.lead_id} suppressed — active cooldown`);
           continue;
         }
         queue.push({
@@ -319,6 +434,97 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
   }
 
   // ---------------------------------------------------------------
+  // PHONE-LEVEL DEDUP — same phone across different lead records
+  // If two leads share a phone, only the highest-priority one dials.
+  // Also checks comms table: if this phone was called in last 3 days
+  // via ANY lead, skip it entirely.
+  // ---------------------------------------------------------------
+  if (queue.length > 0) {
+    const queueLeadIds = [...new Set(queue.map(q => q.lead_id))];
+    const { data: phoneLookup } = await ee
+      .from("leads")
+      .select("id, owner_phone")
+      .in("id", queueLeadIds);
+
+    if (phoneLookup && phoneLookup.length > 0) {
+      const phoneByLead: Record<number, string> = {};
+      for (const l of phoneLookup) {
+        if (l.owner_phone) {
+          phoneByLead[l.id] = l.owner_phone.replace(/[^0-9]/g, "").slice(-10);
+        }
+      }
+
+      // 1. Cross-lead dedup: if multiple leads share a phone, keep highest priority only
+      const seenPhones = new Map<string, QueueItem>();
+      const phoneDedupFiltered: QueueItem[] = [];
+      for (const item of queue) {
+        const phone = phoneByLead[item.lead_id];
+        if (!phone) {
+          phoneDedupFiltered.push(item);
+          continue;
+        }
+        const existing = seenPhones.get(phone);
+        if (!existing) {
+          seenPhones.set(phone, item);
+          phoneDedupFiltered.push(item);
+        } else if (item.priority > existing.priority) {
+          // Replace lower priority with higher
+          const idx = phoneDedupFiltered.indexOf(existing);
+          if (idx >= 0) phoneDedupFiltered[idx] = item;
+          seenPhones.set(phone, item);
+          console.log(`[ee-engine] 📞 Phone dedup: lead ${existing.lead_id} replaced by ${item.lead_id} (same phone ${phone})`);
+        } else {
+          console.log(`[ee-engine] 📞 Phone dedup: lead ${item.lead_id} skipped — same phone as lead ${existing.lead_id}`);
+        }
+      }
+
+      // 2. Recent call check: skip phones called in last 3 days via any lead
+      const uniquePhones = [...seenPhones.keys()];
+      if (uniquePhones.length > 0) {
+        const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+        const { data: recentPhoneComms } = await ee
+          .from("communications")
+          .select("phone_number, lead_id")
+          .eq("direction", "outbound")
+          .gte("created_at", threeDaysAgo);
+
+        if (recentPhoneComms && recentPhoneComms.length > 0) {
+          const recentPhoneSet = new Set<string>();
+          for (const c of recentPhoneComms) {
+            if (c.phone_number) {
+              recentPhoneSet.add(c.phone_number.replace(/[^0-9]/g, "").slice(-10));
+            }
+          }
+
+          const beforePhoneCheck = phoneDedupFiltered.length;
+          const finalFiltered: QueueItem[] = [];
+          for (const item of phoneDedupFiltered) {
+            const phone = phoneByLead[item.lead_id];
+            if (phone && recentPhoneSet.has(phone)) {
+              console.log(`[ee-engine] 📞 Phone ${phone} (lead ${item.lead_id}) called in last 3d — skipped`);
+              continue;
+            }
+            finalFiltered.push(item);
+          }
+
+          if (finalFiltered.length < beforePhoneCheck) {
+            console.log(`[ee-engine] Phone recent-call check: ${beforePhoneCheck - finalFiltered.length} leads removed`);
+          }
+
+          queue.length = 0;
+          queue.push(...finalFiltered);
+        } else {
+          queue.length = 0;
+          queue.push(...phoneDedupFiltered);
+        }
+      } else {
+        queue.length = 0;
+        queue.push(...phoneDedupFiltered);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------
   // ENFORCE DIVERSITY: ensure fresh ratio if fresh leads exist
   // If fresh leads are available but underrepresented, swap retries out
   // ---------------------------------------------------------------
@@ -344,6 +550,26 @@ async function buildAndDialQueue(ee: any, callWindowOpen: boolean) {
   if (queue.length === 0) {
     console.log("[ee-engine] ✓ Empty queue — nothing to dial");
     return { breakdown, dialedCount: 0, dialResults: [] };
+  }
+
+  // ---------------------------------------------------------------
+  // MASTER KILL SWITCH — block dispatch when paused
+  // Queue was built for visibility; now refuse to dial.
+  // ---------------------------------------------------------------
+  if (systemPaused) {
+    console.log(`[ee-engine] ⛔ System paused — ${queue.length} items in queue but 0 dispatched. Queue logged for visibility only.`);
+    return {
+      breakdown,
+      dialedCount: 0,
+      dialResults: queue.map(item => ({
+        follow_up_id: item.follow_up_id,
+        lead_id: item.lead_id,
+        type: item.type,
+        kind: item.kind,
+        result: "outbound_paused",
+        reason: "master_kill_switch_active",
+      })),
+    };
   }
 
   // ---------------------------------------------------------------
@@ -616,6 +842,58 @@ async function processCallbackLifecycle(ee: any) {
         continue;
       }
 
+      // ---------------------------------------------------------------
+      // 13B: CALLBACK CAP CHECK — before rescheduling, check total
+      // callback-type comms. If >= CALLBACK_MAX_ATTEMPTS → hold_review.
+      // ---------------------------------------------------------------
+      const { data: cbComms } = await ee
+        .from("communications")
+        .select("id")
+        .eq("lead_id", lead.id)
+        .eq("direction", "outbound")
+        .eq("disposition", "callback_requested");
+
+      const totalCallbackAttempts = cbComms?.length || 0;
+
+      if (totalCallbackAttempts >= CALLBACK_MAX_ATTEMPTS) {
+        // Cap reached — move to hold_review instead of rescheduling
+        const capUpdate: Record<string, any> = {
+          callback_status: "missed_multiple",
+          callback_resolution: "cap_exceeded",
+          callback_resolution_at: nowISO,
+          callback_last_attempt_at: nowISO,
+          callback_due_at: null,
+          status: "hold_review",
+          pipeline_stage: "needs_human_followup",
+          callable: false,
+          outbound_approved: false,
+          handoff_status: "pending",
+          sla_due_at: new Date(now.getTime() + 4 * 60 * 60 * 1000).toISOString(),
+          state_change_reason: `Callback cap reached: ${totalCallbackAttempts}/${CALLBACK_MAX_ATTEMPTS} attempts without resolution`,
+          updated_at: nowISO,
+        };
+
+        const { error: capErr } = await ee.from("leads").update(capUpdate).eq("id", lead.id);
+        if (capErr) {
+          console.error(`[ee-engine] Callback cap update error (lead ${lead.id}):`, capErr);
+        }
+
+        // Cancel all callback follow-ups
+        await ee.from("follow_ups").update({
+          status: "canceled", canceled_at: nowISO,
+          notes: `Callback cap (${CALLBACK_MAX_ATTEMPTS}) reached — hold_review`,
+        }).eq("lead_id", lead.id).eq("kind", "callback").in("status", ["pending", "scheduled"]);
+
+        results.push({
+          lead_id: lead.id,
+          owner_name: lead.owner_name,
+          action: "callback_cap_hold_review",
+          total_callback_attempts: totalCallbackAttempts,
+        });
+        console.log(`[ee-engine] 🛑 CALLBACK CAP (13B): lead ${lead.id} (${lead.owner_name}) hit ${totalCallbackAttempts} callback attempts → hold_review`);
+        continue;  // Skip normal missed_once / missed_multiple handling
+      }
+
       if (lead.callback_status === "pending") {
         // TASK 4B.4: First miss
         const newAttempts = (lead.callback_attempts || 0) + (callAttempted ? 0 : 0); // webhook already incremented if call happened
@@ -671,6 +949,8 @@ async function processCallbackLifecycle(ee: any) {
 
       } else if (lead.callback_status === "missed_once") {
         // TASK 4B.5: Second miss — downgrade out of callback_pending
+        // Also set 14-day cooldown (13C) to prevent premature re-entry
+        const cooldownUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
         const leadUpdate: Record<string, any> = {
           callback_status: "missed_multiple",
           callback_resolution: "downgraded",
@@ -682,6 +962,7 @@ async function processCallbackLifecycle(ee: any) {
           next_action_at: nowISO,
           handoff_status: "pending",
           sla_due_at: new Date(now.getTime() + 4 * 60 * 60 * 1000).toISOString(),
+          outreach_cooldown_until: cooldownUntil,  // 13C: 14-day cooldown
           updated_at: nowISO,
         };
 

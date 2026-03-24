@@ -1,0 +1,3 @@
+-- Placeholder for orphan remote migration 20260320
+-- Original: Make communications.lead_id nullable to support ambiguous/unknown inbound calls
+-- Already applied to remote database

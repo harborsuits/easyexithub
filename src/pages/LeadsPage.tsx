@@ -70,7 +70,7 @@ export default function LeadsPage() {
   const { data: sources } = useQuery({
     queryKey: ['lead-sources'],
     queryFn: async () => {
-      const { data } = await supabase.from('leads').select('lead_source');
+      const { data } = await supabase.from('leads').select('lead_source').eq('archived', false);
       if (!data) return [];
       const unique = [...new Set(data.map((d) => d.lead_source).filter(Boolean))];
       return unique.sort() as string[];
@@ -85,6 +85,7 @@ export default function LeadsPage() {
       let query = supabase
         .from('leads')
         .select('id, owner_name, owner_address, owner_phone, viability_score, deal_stage_id, last_contact_date, next_followup_date, outreach_count, lead_source, property_data, dnc_listed, callable', { count: 'exact' })
+        .eq('archived', false)
         .order(sortField, { ascending: sortAsc, nullsFirst: false })
         .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 

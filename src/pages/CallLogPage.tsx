@@ -36,7 +36,8 @@ export default function CallLogPage() {
       const { data: leads } = await supabase
         .from('leads')
         .select('id, owner_name, property_data, owner_address, distress_signals, engagement_level, status, next_action_type, next_action_at')
-        .in('id', leadIds);
+        .in('id', leadIds)
+        .eq('archived', false);
       
       const leadMap: Record<number, any> = {};
       leads?.forEach(l => { leadMap[l.id] = l; });

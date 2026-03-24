@@ -405,7 +405,8 @@ export default function DialQueuePage() {
       const { data: leads, error: leadsError } = await supabase
         .from('leads')
         .select('id, owner_name, owner_phone, property_data, engagement_level, cold_attempts, callable, outbound_approved, status, pipeline_stage, last_disposition, lead_source, next_action_type, motivation_type, outreach_count, dnc_listed, data_hygiene_status, sensitive_flag, exhaustion_status, callback_status')
-        .in('id', leadIds);
+        .in('id', leadIds)
+        .eq('archived', false);
       if (leadsError) throw leadsError;
 
       const leadMap: Record<number, any> = {};

@@ -39,7 +39,7 @@ export default function UnifiedDashboard() {
   const { data: totalLeads, isLoading: l1 } = useQuery({
     queryKey: ['kpi-total-leads'],
     queryFn: async () => {
-      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true });
+      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('archived', false);
       return count || 0;
     },
   });
@@ -47,7 +47,7 @@ export default function UnifiedDashboard() {
   const { data: leadsWithPhone, isLoading: l2 } = useQuery({
     queryKey: ['kpi-leads-phone'],
     queryFn: async () => {
-      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).not('owner_phone', 'is', null).neq('owner_phone', '');
+      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('archived', false).not('owner_phone', 'is', null).neq('owner_phone', '');
       return count || 0;
     },
   });
@@ -63,7 +63,7 @@ export default function UnifiedDashboard() {
   const { data: followupsDue, isLoading: l4 } = useQuery({
     queryKey: ['kpi-followups-due'],
     queryFn: async () => {
-      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).lte('next_followup_date', today).not('next_followup_date', 'is', null);
+      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('archived', false).lte('next_followup_date', today).not('next_followup_date', 'is', null);
       return count || 0;
     },
   });
@@ -71,7 +71,7 @@ export default function UnifiedDashboard() {
   const { data: callableLeads, isLoading: l5 } = useQuery({
     queryKey: ['kpi-callable-leads'],
     queryFn: async () => {
-      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('callable', true);
+      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('archived', false).eq('callable', true);
       return count || 0;
     },
   });
@@ -87,7 +87,7 @@ export default function UnifiedDashboard() {
   const { data: leads } = useQuery({
     queryKey: ['leads-stages'],
     queryFn: async () => {
-      const { data } = await supabase.from('leads').select('id, deal_stage_id');
+      const { data } = await supabase.from('leads').select('id, deal_stage_id').eq('archived', false);
       return data || [];
     },
   });
@@ -123,6 +123,7 @@ export default function UnifiedDashboard() {
       const { data } = await supabase
         .from('leads')
         .select('id, owner_name, viability_score, next_followup_date')
+        .eq('archived', false)
         .lte('next_followup_date', today)
         .not('next_followup_date', 'is', null)
         .order('viability_score', { ascending: false, nullsFirst: false })
@@ -137,6 +138,7 @@ export default function UnifiedDashboard() {
       const { data } = await supabase
         .from('leads')
         .select('id, owner_name, viability_score')
+        .eq('archived', false)
         .gte('viability_score', 40)
         .is('last_contact_date', null)
         .order('viability_score', { ascending: false, nullsFirst: false })

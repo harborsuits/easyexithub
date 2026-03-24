@@ -10,7 +10,7 @@ export default function ImportLeadsPage() {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [result, setResult] = useState<{ success: number; errors: number } | null>(null);
+  const [result, setResult] = useState<{ success: number; errors: number; blocked?: number; duplicates?: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadLeads = async () => {
@@ -40,18 +40,51 @@ export default function ImportLeadsPage() {
     setError(null);
     let successCount = 0;
     let errorCount = 0;
+    let blockedCount = 0;
+    let duplicateCount = 0;
 
     try {
       for (const processed of leads) {
         try {
           const appLead = convertToAppLead(processed);
           
-          // Check if lead already exists by address
-          const { data: existing } = await supabase
-            .from('leads')
-            .select('id')
-            .eq('property_address', appLead.property_address)
-            .single();
+          // IMPORT GUARD: Check blocked_phones first
+          // Normalize to bare 10 digits to match blocked_phones.normalized_phone
+          if (appLead.owner_phone) {
+            const bare10 = appLead.owner_phone.replace(/[^0-9]/g, '').slice(-10);
+            const { data: blockedPhone } = await supabase
+              .from('blocked_phones')
+              .select('normalized_phone, reason')
+              .eq('normalized_phone', bare10)
+              .eq('active', true)
+              .maybeSingle();
+
+            if (blockedPhone) {
+              console.log(`Blocked phone (${blockedPhone.reason}):`, appLead.owner_phone);
+              blockedCount++;
+              continue;
+            }
+          }
+          
+          // Check if lead already exists by phone (primary) or address (fallback)
+          let existing = null;
+          if (appLead.owner_phone) {
+            const { data: phoneMatch } = await supabase
+              .from('leads')
+              .select('id')
+              .eq('owner_phone', appLead.owner_phone)
+              .single();
+            existing = phoneMatch;
+          }
+          
+          if (!existing) {
+            const { data: addressMatch } = await supabase
+              .from('leads')
+              .select('id')
+              .eq('property_address', appLead.property_address)
+              .single();
+            existing = addressMatch;
+          }
 
           if (!existing) {
             // Insert new lead
@@ -68,6 +101,7 @@ export default function ImportLeadsPage() {
           } else {
             // Skip duplicate
             console.log('Skipping duplicate:', appLead.property_address);
+            duplicateCount++;
           }
         } catch (err) {
           console.error('Error processing lead:', err);
@@ -75,7 +109,12 @@ export default function ImportLeadsPage() {
         }
       }
 
-      setResult({ success: successCount, errors: errorCount });
+      setResult({ 
+        success: successCount, 
+        errors: errorCount,
+        blocked: blockedCount,
+        duplicates: duplicateCount
+      });
     } catch (err: any) {
       setError(err.message || 'Import failed');
     } finally {
@@ -176,6 +215,8 @@ export default function ImportLeadsPage() {
               <h3 className="font-semibold text-green-900 mb-1">Import Complete</h3>
               <p className="text-sm text-green-700">
                 Successfully imported <strong>{result.success}</strong> leads.
+                {result.blocked && result.blocked > 0 && ` ${result.blocked} blocked (suppressed).`}
+                {result.duplicates && result.duplicates > 0 && ` ${result.duplicates} duplicates skipped.`}
                 {result.errors > 0 && ` ${result.errors} errors encountered.`}
               </p>
             </div>

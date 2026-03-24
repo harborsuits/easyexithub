@@ -159,6 +159,7 @@ export default function DealsPage() {
             markets(name),
             buyers(company_name, contact_name)
           `)
+          .eq('archived', false)
           .not('assigned_buyer_id', 'is', null)
           .order('assignment_date', { ascending: false });
 

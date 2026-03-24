@@ -113,6 +113,7 @@ export function PipelineCalendar() {
       const { data } = await supabase
         .from('leads')
         .select('id, owner_name, owner_phone, next_followup_date, viability_score, status, property_data, outreach_count, estimated_arv, pipeline_stage, next_action_type, next_action_at, handoff_status, last_disposition, engagement_level')
+        .eq('archived', false)
         .or('next_followup_date.not.is.null,next_action_at.not.is.null')
         .not('status', 'in', '(dead,dnc,suppressed)');
       return data || [];

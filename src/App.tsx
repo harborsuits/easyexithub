@@ -13,6 +13,8 @@ import { BuyersPage } from "./pages/BuyersPage";
 import ImportRunsPage from "./pages/ImportRunsPage";
 import CallLogPage from "./pages/CallLogPage";
 import DialQueuePage from "./pages/DialQueuePage";
+import NeedsHumanPage from "./pages/NeedsHumanPage";
+import PipelineControlPage from "./pages/PipelineControlPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -29,7 +31,9 @@ const App = () => (
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/leads/:id" element={<LeadDetailPage />} />
           <Route path="/pipeline" element={<PipelinePage />} />
+          <Route path="/pipeline-control" element={<PipelineControlPage />} />
           <Route path="/queue" element={<DialQueuePage />} />
+          <Route path="/needs-human" element={<NeedsHumanPage />} />
           <Route path="/deals" element={<DealsPage />} />
           <Route path="/buyers" element={<BuyersPage />} />
           <Route path="/imports" element={<ImportRunsPage />} />
