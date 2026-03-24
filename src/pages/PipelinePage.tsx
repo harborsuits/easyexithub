@@ -74,8 +74,8 @@ export function PipelinePage() {
     queryKey: ['leads-pipeline'],
     queryFn: async () => {
       const { data } = await supabase.from('leads').select(
-        'id, owner_name, owner_phone, owner_email, pipeline_stage, viability_score, status, property_data, next_followup_date, last_contact_date, outreach_count, motivation_type, callable, last_disposition, next_action_type, next_action_at, handoff_status, data_hygiene_status, sensitive_flag, exhaustion_status, callback_status'
-      ).eq('archived', false);
+        'id, owner_name, owner_phone, owner_email, pipeline_stage, viability_score, status, property_data, next_followup_date, last_contact_date, outreach_count, motivation_type, callable, last_disposition, next_action_type, next_action_at, handoff_status, data_hygiene_status, sensitive_flag, exhaustion_status, callback_status, is_test_lead'
+      ).eq('archived', false).eq('is_test_lead', false);
       return data || [];
     },
   });
